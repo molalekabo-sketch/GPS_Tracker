@@ -1,0 +1,14 @@
+{
+  "name": "esp32-4g-tracker-dashboard",
+  "version": "1.0.0",
+  "description": "Real-time GPS and Voltage tracker dashboard",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "mqtt": "^5.5.0",
+    "socket.io": "^4.7.5"
+  }
+}

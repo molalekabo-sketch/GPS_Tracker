@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time GPS Tracker</title>
+    
+    <!-- Leaflet Map Library (Open-source, no API key needed) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    
+    <!-- Socket.io for real-time updates -->
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body, html {
+            height: 100%;
+            width: 100%;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+
+        /* Telemetry Overlay Panel */
+        #telemetry-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            z-index: 999;
+            min-width: 280px;
+            color: white;
+            font-weight: 500;
+        }
+
+        #telemetry-panel h2 {
+            margin-bottom: 15px;
+            font-size: 18px;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+            padding-bottom: 10px;
+        }
+
+        .telemetry-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            font-size: 14px;
+        }
+
+        .telemetry-label {
+            opacity: 0.9;
+        }
+
+        .telemetry-value {
+            font-weight: bold;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+        }
+
+        /* Stats Panel */
+        #stats-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            z-index: 999;
+            min-width: 200px;
+            font-size: 12px;
+            color: #333;
+        }
+
+        #stats-panel h3 {
+            margin-bottom: 10px;
+            color: #667eea;
+            font-size: 14px;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 8px;
+        }
+
+        .stat-item {
+            margin: 5px 0;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .stat-label {
+            opacity: 0.7;
+        }
+
+        .stat-value {
+            font-weight: bold;
+            color: #764ba2;
+            font-family: 'Courier New', monospace;
+        }
+
+        /* Control Panel */
+        #control-panel {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            z-index: 999;
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+
+        button:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(118, 75, 162, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        /* Connection status indicator */
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #4CAF50;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.disconnected {
+            background: #f44336;
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Path trail styling */
+        .leaflet-popup-content {
+            font-size: 12px;
+            width: auto;
+        }
+    </style>
+</head>
+<body>
+    <!-- Map Container -->
+    <div id="map"></div>
+
+    <!-- Telemetry Data Panel -->
+    <div id="telemetry-panel">
+        <h2><span class="status-indicator"></span>Asset Telemetry</h2>
+        <div class="telemetry-row">
+            <span class="telemetry-label">Latitude:</span>
+            <span class="telemetry-value" id="lat-value">-33.9249</span>
+        </div>
+        <div class="telemetry-row">
+            <span class="telemetry-label">Longitude:</span>
+            <span class="telemetry-value" id="lon-value">18.4241</span>
+        </div>
+        <div class="telemetry-row">
+            <span class="telemetry-label">Voltage:</span>
+            <span class="telemetry-value" id="volt-value">12.60 V</span>
+        </div>
+        <div class="telemetry-row">
+            <span class="telemetry-label">Last Update:</span>
+            <span class="telemetry-value" id="time-value">--:--:--</span>
+        </div>
+    </div>
+
+    <!-- Statistics Panel -->
+    <div id="stats-panel">
+        <h3>📊 Track Statistics</h3>
+        <div class="stat-item">
+            <span class="stat-label">Points Tracked:</span>
+            <span class="stat-value" id="stat-points">0</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Voltage (Min):</span>
+            <span class="stat-value" id="stat-volt-min">--</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Voltage (Max):</span>
+            <span class="stat-value" id="stat-volt-max">--</span>
+        </div>
+        <div class="stat-item">
+            <span class="stat-label">Coverage:</span>
+            <span class="stat-value" id="stat-coverage">-- km</span>
+        </div>
+    </div>
+
+    <!-- Control Buttons -->
+    <div id="control-panel">
+        <button onclick="clearTrack()">🗑️ Clear Track</button>
+        <button onclick="centerMap()">📍 Center Map</button>
+        <button onclick="downloadTrack()">⬇️ Export Data</button>
+    </div>
+
+    <script>
+        let map;
+        let marker;
+        let polyline;
+        let coordinateHistory = [];
+        const socket = io();
+        let isConnected = false;
+
+        // Initialize map on page load
+        function initMap() {
+            const defaultPos = [-33.9249, 18.4241]; // Cape Town
+            
+            map = L.map('map', {
+                center: defaultPos,
+                zoom: 13,
+                layers: [
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '© OpenStreetMap contributors',
+                        maxZoom: 19
+                    })
+                ]
+            });
+
+            // Add current location marker
+            marker = L.circleMarker(defaultPos, {
+                radius: 8,
+                fillColor: '#667eea',
+                color: '#764ba2',
+                weight: 3,
+                opacity: 1,
+                fillOpacity: 0.8
+            }).addTo(map).bindPopup('Asset Location');
+
+            // Initialize empty polyline for path trail
+            polyline = L.polyline([], {
+                color: '#667eea',
+                weight: 3,
+                opacity: 0.7,
+                smoothFactor: 1
+            }).addTo(map);
+
+            console.log('Map initialized at', defaultPos);
+        }
+
+        // Update marker position and path
+        socket.on('location_update', (data) => {
+            if (!data.lat || !data.lon) return;
+
+            const pos = [parseFloat(data.lat), parseFloat(data.lon)];
+            const timestamp = new Date();
+
+            // Update marker position
+            marker.setLatLng(pos);
+            marker.setPopupContent(`
+                <strong>Asset Location</strong><br>
+                Lat: ${data.lat.toFixed(6)}<br>
+                Lon: ${data.lon.toFixed(6)}<br>
+                Voltage: ${data.v_ext} V<br>
+                Time: ${timestamp.toLocaleTimeString()}
+            `);
+
+            // Add to history and polyline
+            coordinateHistory.push({
+                lat: data.lat,
+                lon: data.lon,
+                v_ext: data.v_ext,
+                timestamp: timestamp.toISOString()
+            });
+
+            polyline.addLatLng(pos);
+
+            // Auto-pan to stay centered on asset
+            map.panTo(pos);
+
+            // Adjust zoom on first location
+            if (map.getZoom() < 15) {
+                map.setZoom(16);
+            }
+
+            // Update telemetry display
+            document.getElementById('lat-value').textContent = data.lat.toFixed(6);
+            document.getElementById('lon-value').textContent = data.lon.toFixed(6);
+            document.getElementById('volt-value').textContent = data.v_ext + ' V';
+            document.getElementById('time-value').textContent = timestamp.toLocaleTimeString();
+
+            // Update statistics
+            updateStats();
+        });
+
+        // Update stats panel
+        function updateStats() {
+            if (coordinateHistory.length === 0) return;
+
+            const voltages = coordinateHistory.map(c => c.v_ext);
+            const lats = coordinateHistory.map(c => c.lat);
+            const lons = coordinateHistory.map(c => c.lon);
+
+            // Calculate approximate distance (simple Euclidean)
+            let totalDistance = 0;
+            for (let i = 1; i < coordinateHistory.length; i++) {
+                const prev = coordinateHistory[i - 1];
+                const curr = coordinateHistory[i];
+                const latDiff = (curr.lat - prev.lat) * 111; // 1° lat ≈ 111 km
+                const lonDiff = (curr.lon - prev.lon) * 111 * Math.cos(curr.lat * Math.PI / 180);
+                totalDistance += Math.sqrt(latDiff * latDiff + lonDiff * lonDiff);
+            }
+
+            document.getElementById('stat-points').textContent = coordinateHistory.length;
+            document.getElementById('stat-volt-min').textContent = Math.min(...voltages).toFixed(2);
+            document.getElementById('stat-volt-max').textContent = Math.max(...voltages).toFixed(2);
+            document.getElementById('stat-coverage').textContent = totalDistance.toFixed(2);
+        }
+
+        // Control Functions
+        function clearTrack() {
+            coordinateHistory = [];
+            polyline.setLatLngs([]);
+            document.getElementById('stat-points').textContent = '0';
+            console.log('Track cleared');
+        }
+
+        function centerMap() {
+            if (coordinateHistory.length > 0) {
+                const latest = coordinateHistory[coordinateHistory.length - 1];
+                map.setView([latest.lat, latest.lon], 16);
+            }
+        }
+
+        function downloadTrack() {
+            if (coordinateHistory.length === 0) {
+                alert('No track data to download');
+                return;
+            }
+            
+            const csv = 'Latitude,Longitude,Voltage,Timestamp\n' +
+                coordinateHistory.map(c => `${c.lat},${c.lon},${c.v_ext},"${c.timestamp}"`).join('\n');
+            
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `gps-track-${new Date().toISOString().slice(0, 10)}.csv`;
+            a.click();
+        }
+
+        // Update connection status
+        socket.on('connect', () => {
+            document.querySelector('.status-indicator').classList.remove('disconnected');
+            isConnected = true;
+            console.log('Connected to server');
+        });
+
+        socket.on('disconnect', () => {
+            document.querySelector('.status-indicator').classList.add('disconnected');
+            isConnected = false;
+            console.log('Disconnected from server');
+        });
+
+        // Load historical data on page load
+        fetch('/api/history')
+            .then(res => res.json())
+            .then(data => {
+                if (data.coordinates && data.coordinates.length > 0) {
+                    coordinateHistory = data.coordinates;
+                    const coords = data.coordinates.map(c => [c.lat, c.lon]);
+                    polyline.setLatLngs(coords);
+                    updateStats();
+                    
+                    // Center on latest
+                    const latest = data.coordinates[data.coordinates.length - 1];
+                    map.setView([latest.lat, latest.lon], 16);
+                }
+            })
+            .catch(err => console.error('Error loading history:', err));
+
+        // Initialize on page load
+        window.addEventListener('load', initMap);
+    </script>
+</body>
+</html>
