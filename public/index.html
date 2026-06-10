@@ -207,15 +207,18 @@
         <h2><span class="status-indicator"></span>Asset Telemetry</h2>
         <div class="telemetry-row">
             <span class="telemetry-label">Latitude:</span>
-            <span class="telemetry-value" id="lat-value">-33.9249</span>
+            <span class="telemetry-value" id="lat-value">--</span>
+
         </div>
         <div class="telemetry-row">
             <span class="telemetry-label">Longitude:</span>
-            <span class="telemetry-value" id="lon-value">18.4241</span>
+            <span class="telemetry-value" id="lon-value">--</span>
+
         </div>
         <div class="telemetry-row">
             <span class="telemetry-label">Voltage:</span>
-            <span class="telemetry-value" id="volt-value">12.60 V</span>
+            <span class="telemetry-value" id="volt-value">--</span>
+
         </div>
         <div class="telemetry-row">
             <span class="telemetry-label">Last Update:</span>
@@ -274,7 +277,11 @@
         const MQTT_PASS = 'Admin12345';
         const MQTT_TOPIC = 'SimuTech/gps/location';
 
+        // Await-first-fix state (avoid any generated/default coordinate data)
+        let hasFirstFix = false;
+
         // Coordinate Conversion Functions
+
         function decimalDegreesToDMS(decimal, isLat) {
             const direction = isLat ? (decimal >= 0 ? 'N' : 'S') : (decimal >= 0 ? 'E' : 'W');
             decimal = Math.abs(decimal);
@@ -382,29 +389,40 @@
         }
 
         function updateDisplay(data) {
-            if (!data.latitude || !data.longitude) return;
+            // ESP32 publishes: {"latitude":...,"longitude":...,"altitude":...,"speed":...}
+            // (No generated/mock data should be used; only accept valid incoming values.)
+            const lat = data.latitude;
+            const lon = data.longitude;
 
-            const pos = [parseFloat(data.latitude), parseFloat(data.longitude)];
+            if (lat === undefined || lon === undefined) return;
+            if (lat === null || lon === null) return;
+
+            const latNum = parseFloat(lat);
+            const lonNum = parseFloat(lon);
+            if (!Number.isFinite(latNum) || !Number.isFinite(lonNum)) return;
+
+            const pos = [latNum, lonNum];
             const timestamp = new Date();
-            const formattedCoords = formatCoordinates(data.latitude, data.longitude, currentFormat);
+            const formattedCoords = formatCoordinates(latNum, lonNum, currentFormat);
 
-            // Update marker position
+            // Update marker position and show it on first fix
             marker.setLatLng(pos);
+            marker.setStyle({ opacity: 1, fillOpacity: 0.8 });
             marker.setPopupContent(`
                 <strong>ESP32-S3 GPS Tracker</strong><br>
                 Lat: ${formattedCoords.lat}<br>
                 Lon: ${formattedCoords.lon}<br>
-                Altitude: ${data.altitude ? data.altitude.toFixed(2) + ' m' : 'N/A'}<br>
-                Speed: ${data.speed ? data.speed.toFixed(2) + ' m/s' : 'N/A'}<br>
+                Altitude: ${data.altitude ? parseFloat(data.altitude).toFixed(2) + ' m' : 'N/A'}<br>
+                Speed: ${data.speed ? parseFloat(data.speed).toFixed(2) + ' m/s' : 'N/A'}<br>
                 Time: ${timestamp.toLocaleTimeString()}
             `);
 
             // Add to history and polyline
             coordinateHistory.push({
-                lat: data.latitude,
-                lon: data.longitude,
-                altitude: data.altitude || 0,
-                speed: data.speed || 0,
+                lat: latNum,
+                lon: lonNum,
+                altitude: data.altitude ? parseFloat(data.altitude) : 0,
+                speed: data.speed ? parseFloat(data.speed) : 0,
                 timestamp: timestamp.toISOString()
             });
 
@@ -414,27 +432,31 @@
             map.panTo(pos);
 
             // Adjust zoom on first location
-            if (map.getZoom() < 15) {
+            if (!hasFirstFix) {
+                hasFirstFix = true;
                 map.setZoom(16);
             }
 
             // Update telemetry display with formatted coordinates
             document.getElementById('lat-value').textContent = formattedCoords.lat;
             document.getElementById('lon-value').textContent = formattedCoords.lon;
-            document.getElementById('volt-value').textContent = (data.altitude ? data.altitude.toFixed(2) + ' m' : 'N/A');
+            // Your current UI label is "Voltage" but ESP32 firmware sends altitude/speed.
+            document.getElementById('volt-value').textContent = data.altitude ? `${parseFloat(data.altitude).toFixed(2)} m` : 'N/A';
             document.getElementById('time-value').textContent = timestamp.toLocaleTimeString();
 
             // Update statistics
             updateStats();
         }
 
+
         // Initialize map on page load
         function initMap() {
-            const defaultPos = [-33.9249, 18.4241]; // Cape Town
-            
+            // Avoid any generated/default coordinate data. Only render after the first real MQTT message.
+            const initialCenter = [0, 0];
+
             map = L.map('map', {
-                center: defaultPos,
-                zoom: 13,
+                center: initialCenter,
+                zoom: 2,
                 layers: [
                     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                         attribution: '© OpenStreetMap contributors',
@@ -443,15 +465,15 @@
                 ]
             });
 
-            // Add current location marker
-            marker = L.circleMarker(defaultPos, {
+            // Marker starts hidden until first fix
+            marker = L.circleMarker(initialCenter, {
                 radius: 8,
                 fillColor: '#667eea',
                 color: '#764ba2',
                 weight: 3,
-                opacity: 1,
-                fillOpacity: 0.8
-            }).addTo(map).bindPopup('Waiting for GPS data...');
+                opacity: 0,
+                fillOpacity: 0
+            }).addTo(map).bindPopup('Waiting for first GPS fix...');
 
             // Initialize empty polyline for path trail
             polyline = L.polyline([], {
@@ -461,15 +483,22 @@
                 smoothFactor: 1
             }).addTo(map);
 
-            console.log('Map initialized at', defaultPos);
+            console.log('Map initialized (awaiting first GPS fix)');
 
             // Initialize MQTT connection
             initMQTT();
+
         }
 
         // Update stats panel
         function updateStats() {
             if (coordinateHistory.length === 0) return;
+
+            // Ensure we have valid numeric points before computing coverage
+            for (const c of coordinateHistory) {
+                if (!Number.isFinite(Number(c.lat)) || !Number.isFinite(Number(c.lon))) return;
+            }
+
 
             const lats = coordinateHistory.map(c => c.lat);
             const lons = coordinateHistory.map(c => c.lon);
