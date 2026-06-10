@@ -9,8 +9,8 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
     
-    <!-- Socket.io for real-time updates -->
-    <script src="/socket.io/socket.io.js"></script>
+    <!-- MQTT.js for real-time GPS updates -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
     
     <style>
         * {
@@ -172,6 +172,30 @@
             font-size: 12px;
             width: auto;
         }
+
+        /* Format Toggle */
+        #format-toggle {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 10px;
+            border-radius: 6px;
+            z-index: 999;
+            font-size: 11px;
+        }
+
+        #format-toggle label {
+            margin: 0 5px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        #format-toggle input[type="radio"] {
+            margin-right: 5px;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -227,13 +251,182 @@
         <button onclick="downloadTrack()">⬇️ Export Data</button>
     </div>
 
+    <!-- Format Toggle -->
+    <div id="format-toggle">
+        <label><input type="radio" name="format" value="dd" checked onchange="updateCoordinateFormat()"> Decimal Degrees</label>
+        <label><input type="radio" name="format" value="dms" onchange="updateCoordinateFormat()"> DMS</label>
+        <label><input type="radio" name="format" value="ddm" onchange="updateCoordinateFormat()"> DDM</label>
+    </div>
+
     <script>
         let map;
         let marker;
         let polyline;
         let coordinateHistory = [];
-        const socket = io();
+        let mqttClient;
         let isConnected = false;
+        let currentFormat = 'dd'; // Decimal Degrees by default
+        let lastGPSData = null;
+
+        // HiveMQ Configuration
+        const MQTT_BROKER = 'wss://1e129245fe62491cb0e691c34b75ae34.s1.eu.hivemq.cloud:8884/mqtt';
+        const MQTT_USER = 'admin';
+        const MQTT_PASS = 'Admin12345';
+        const MQTT_TOPIC = 'SimuTech/gps/location';
+
+        // Coordinate Conversion Functions
+        function decimalDegreesToDMS(decimal, isLat) {
+            const direction = isLat ? (decimal >= 0 ? 'N' : 'S') : (decimal >= 0 ? 'E' : 'W');
+            decimal = Math.abs(decimal);
+            const degrees = Math.floor(decimal);
+            const minutes = Math.floor((decimal - degrees) * 60);
+            const seconds = ((decimal - degrees - minutes / 60) * 3600).toFixed(2);
+            return `${degrees}° ${minutes}' ${seconds}" ${direction}`;
+        }
+
+        function decimalDegreesToDDM(decimal, isLat) {
+            const direction = isLat ? (decimal >= 0 ? 'N' : 'S') : (decimal >= 0 ? 'E' : 'W');
+            decimal = Math.abs(decimal);
+            const degrees = Math.floor(decimal);
+            const minutes = ((decimal - degrees) * 60).toFixed(4);
+            return `${degrees}° ${minutes}' ${direction}`;
+        }
+
+        function formatCoordinates(lat, lon, format) {
+            switch(format) {
+                case 'dms':
+                    return {
+                        lat: decimalDegreesToDMS(lat, true),
+                        lon: decimalDegreesToDMS(lon, false)
+                    };
+                case 'ddm':
+                    return {
+                        lat: decimalDegreesToDDM(lat, true),
+                        lon: decimalDegreesToDDM(lon, false)
+                    };
+                default: // 'dd' - Decimal Degrees
+                    return {
+                        lat: lat.toFixed(6),
+                        lon: lon.toFixed(6)
+                    };
+            }
+        }
+
+        function updateCoordinateFormat() {
+            currentFormat = document.querySelector('input[name="format"]:checked').value;
+            if (lastGPSData) {
+                updateDisplay(lastGPSData);
+            }
+        }
+
+        // Initialize MQTT connection
+        function initMQTT() {
+            try {
+                mqttClient = new Paho.MQTT.Client(MQTT_BROKER, 'esp32_gps_web_' + Math.random().toString(16).substr(2, 8));
+                
+                mqttClient.onConnectionLost = onConnectionLost;
+                mqttClient.onMessageArrived = onMessageArrived;
+
+                // Connect options
+                const connectOptions = {
+                    onSuccess: onConnectSuccess,
+                    onFailure: onConnectFailure,
+                    useSSL: true,
+                    userName: MQTT_USER,
+                    password: MQTT_PASS,
+                    reconnect: true,
+                    cleanSession: true
+                };
+
+                mqttClient.connect(connectOptions);
+                console.log('Attempting MQTT connection to HiveMQ...');
+            } catch (err) {
+                console.error('MQTT connection error:', err);
+            }
+        }
+
+        function onConnectSuccess() {
+            console.log('Connected to HiveMQ!');
+            document.querySelector('.status-indicator').classList.remove('disconnected');
+            isConnected = true;
+            
+            // Subscribe to GPS topic
+            mqttClient.subscribe(MQTT_TOPIC, { qos: 1 });
+            console.log('Subscribed to topic:', MQTT_TOPIC);
+        }
+
+        function onConnectFailure(response) {
+            console.error('MQTT connection failed:', response.errorMessage);
+            document.querySelector('.status-indicator').classList.add('disconnected');
+            isConnected = false;
+        }
+
+        function onConnectionLost(responseObject) {
+            if (responseObject.errorCode !== 0) {
+                console.log('Connection lost:', responseObject.errorMessage);
+                document.querySelector('.status-indicator').classList.add('disconnected');
+                isConnected = false;
+            }
+        }
+
+        function onMessageArrived(message) {
+            try {
+                const payload = JSON.parse(message.payloadString);
+                console.log('GPS Data received:', payload);
+                
+                lastGPSData = payload;
+                updateDisplay(payload);
+            } catch (err) {
+                console.error('Error parsing GPS data:', err);
+            }
+        }
+
+        function updateDisplay(data) {
+            if (!data.latitude || !data.longitude) return;
+
+            const pos = [parseFloat(data.latitude), parseFloat(data.longitude)];
+            const timestamp = new Date();
+            const formattedCoords = formatCoordinates(data.latitude, data.longitude, currentFormat);
+
+            // Update marker position
+            marker.setLatLng(pos);
+            marker.setPopupContent(`
+                <strong>ESP32-S3 GPS Tracker</strong><br>
+                Lat: ${formattedCoords.lat}<br>
+                Lon: ${formattedCoords.lon}<br>
+                Altitude: ${data.altitude ? data.altitude.toFixed(2) + ' m' : 'N/A'}<br>
+                Speed: ${data.speed ? data.speed.toFixed(2) + ' m/s' : 'N/A'}<br>
+                Time: ${timestamp.toLocaleTimeString()}
+            `);
+
+            // Add to history and polyline
+            coordinateHistory.push({
+                lat: data.latitude,
+                lon: data.longitude,
+                altitude: data.altitude || 0,
+                speed: data.speed || 0,
+                timestamp: timestamp.toISOString()
+            });
+
+            polyline.addLatLng(pos);
+
+            // Auto-pan to stay centered on asset
+            map.panTo(pos);
+
+            // Adjust zoom on first location
+            if (map.getZoom() < 15) {
+                map.setZoom(16);
+            }
+
+            // Update telemetry display with formatted coordinates
+            document.getElementById('lat-value').textContent = formattedCoords.lat;
+            document.getElementById('lon-value').textContent = formattedCoords.lon;
+            document.getElementById('volt-value').textContent = (data.altitude ? data.altitude.toFixed(2) + ' m' : 'N/A');
+            document.getElementById('time-value').textContent = timestamp.toLocaleTimeString();
+
+            // Update statistics
+            updateStats();
+        }
 
         // Initialize map on page load
         function initMap() {
@@ -258,7 +451,7 @@
                 weight: 3,
                 opacity: 1,
                 fillOpacity: 0.8
-            }).addTo(map).bindPopup('Asset Location');
+            }).addTo(map).bindPopup('Waiting for GPS data...');
 
             // Initialize empty polyline for path trail
             polyline = L.polyline([], {
@@ -269,58 +462,15 @@
             }).addTo(map);
 
             console.log('Map initialized at', defaultPos);
+
+            // Initialize MQTT connection
+            initMQTT();
         }
-
-        // Update marker position and path
-        socket.on('location_update', (data) => {
-            if (!data.lat || !data.lon) return;
-
-            const pos = [parseFloat(data.lat), parseFloat(data.lon)];
-            const timestamp = new Date();
-
-            // Update marker position
-            marker.setLatLng(pos);
-            marker.setPopupContent(`
-                <strong>Asset Location</strong><br>
-                Lat: ${data.lat.toFixed(6)}<br>
-                Lon: ${data.lon.toFixed(6)}<br>
-                Voltage: ${data.v_ext} V<br>
-                Time: ${timestamp.toLocaleTimeString()}
-            `);
-
-            // Add to history and polyline
-            coordinateHistory.push({
-                lat: data.lat,
-                lon: data.lon,
-                v_ext: data.v_ext,
-                timestamp: timestamp.toISOString()
-            });
-
-            polyline.addLatLng(pos);
-
-            // Auto-pan to stay centered on asset
-            map.panTo(pos);
-
-            // Adjust zoom on first location
-            if (map.getZoom() < 15) {
-                map.setZoom(16);
-            }
-
-            // Update telemetry display
-            document.getElementById('lat-value').textContent = data.lat.toFixed(6);
-            document.getElementById('lon-value').textContent = data.lon.toFixed(6);
-            document.getElementById('volt-value').textContent = data.v_ext + ' V';
-            document.getElementById('time-value').textContent = timestamp.toLocaleTimeString();
-
-            // Update statistics
-            updateStats();
-        });
 
         // Update stats panel
         function updateStats() {
             if (coordinateHistory.length === 0) return;
 
-            const voltages = coordinateHistory.map(c => c.v_ext);
             const lats = coordinateHistory.map(c => c.lat);
             const lons = coordinateHistory.map(c => c.lon);
 
@@ -335,8 +485,8 @@
             }
 
             document.getElementById('stat-points').textContent = coordinateHistory.length;
-            document.getElementById('stat-volt-min').textContent = Math.min(...voltages).toFixed(2);
-            document.getElementById('stat-volt-max').textContent = Math.max(...voltages).toFixed(2);
+            document.getElementById('stat-volt-min').textContent = '--';
+            document.getElementById('stat-volt-max').textContent = '--';
             document.getElementById('stat-coverage').textContent = totalDistance.toFixed(2);
         }
 
@@ -361,8 +511,8 @@
                 return;
             }
             
-            const csv = 'Latitude,Longitude,Voltage,Timestamp\n' +
-                coordinateHistory.map(c => `${c.lat},${c.lon},${c.v_ext},"${c.timestamp}"`).join('\n');
+            const csv = 'Latitude,Longitude,Altitude,Speed,Timestamp\n' +
+                coordinateHistory.map(c => `${c.lat},${c.lon},${c.altitude},${c.speed},"${c.timestamp}"`).join('\n');
             
             const blob = new Blob([csv], { type: 'text/csv' });
             const url = window.URL.createObjectURL(blob);
@@ -371,36 +521,6 @@
             a.download = `gps-track-${new Date().toISOString().slice(0, 10)}.csv`;
             a.click();
         }
-
-        // Update connection status
-        socket.on('connect', () => {
-            document.querySelector('.status-indicator').classList.remove('disconnected');
-            isConnected = true;
-            console.log('Connected to server');
-        });
-
-        socket.on('disconnect', () => {
-            document.querySelector('.status-indicator').classList.add('disconnected');
-            isConnected = false;
-            console.log('Disconnected from server');
-        });
-
-        // Load historical data on page load
-        fetch('/api/history')
-            .then(res => res.json())
-            .then(data => {
-                if (data.coordinates && data.coordinates.length > 0) {
-                    coordinateHistory = data.coordinates;
-                    const coords = data.coordinates.map(c => [c.lat, c.lon]);
-                    polyline.setLatLngs(coords);
-                    updateStats();
-                    
-                    // Center on latest
-                    const latest = data.coordinates[data.coordinates.length - 1];
-                    map.setView([latest.lat, latest.lon], 16);
-                }
-            })
-            .catch(err => console.error('Error loading history:', err));
 
         // Initialize on page load
         window.addEventListener('load', initMap);
