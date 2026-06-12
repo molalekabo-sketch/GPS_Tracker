@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <HardwareSerial.h>
+#include <WiFi.h>
 
 // Developer Hardware Pin Definitions
 #define IO_RXD2        47   // ESP32-S3 RX <- Modem TX
@@ -9,12 +10,36 @@
 
 #define DEBUG true
 
+// --- Wi-Fi Credentials ---
+const char* ssid     = "MolaleK";
+const char* password = "ncde1975";
+
+void setup_wifi() {
+  delay(10);
+  Serial.println();
+  Serial.print("Connecting to network: ");
+  Serial.println(ssid);
+
+  // 1. Set ESP32 Wi-Fi mode to Station (Client mode)
+  WiFi.mode(WIFI_STA); 
+  
+  // 2. Start the connection process
+  WiFi.begin(ssid, password);
+}
+
 // MQTT Configuration (HiveMQ Cloud - 4G Modem Native MQTT)
-const char MQTT_BROKER[] = "1e129245fe62491cb0e691c34b75ae34.s1.eu.hivemq.cloud";
-const int MQTT_PORT = 1883;  // Modem uses standard MQTT (not TLS)
-const char MQTT_USER[] = "admin";
-const char MQTT_PASS[] = "Admin12345";
-const char MQTT_TOPIC[] = "SimuTech/gps/location";
+// Public MQTT broker (no TLS)
+const char MQTT_BROKER[] = "broker.hivemq.com";
+const int MQTT_PORT = 1883;
+
+// Public broker credentials not required
+const char MQTT_USER[] = "";
+const char MQTT_PASS[] = "";
+// Publish each GPS field on its own topic
+const char MQTT_TOPIC_LAT[] = "SimuTech/gps/latitude";
+const char MQTT_TOPIC_LON[] = "SimuTech/gps/longitude";
+const char MQTT_TOPIC_ALT[] = "SimuTech/gps/altitude";
+const char MQTT_TOPIC_SPEED[] = "SimuTech/gps/speed";
 const char MQTT_CLIENT_ID[] = "ESP32S3_A7670_GPS_Tracker";
 const char MQTT_APN[] = "internet";  // Change to your SIM provider's APN
 
@@ -137,7 +162,36 @@ void publishGPSData(GPSData gpsData)
   
   // Build AT command for MQTT publish
   // Format: AT+CMQPUB=0,"topic",qos,retain,dup,len,"message"
-  String pubCmd = "AT+CMQPUB=0,\"" + String(MQTT_TOPIC) + "\",0,0,0," + String(msgLen) + ",\"" + String(payload) + "\"";
+  // Publish the 4 fields as separate topics with plain string values.
+
+  char valueBuf[32];
+
+  // Latitude
+  snprintf(valueBuf, sizeof(valueBuf), "%.6f", gpsData.latitude);
+  int latLen = strlen(valueBuf);
+  String pubLatCmd = "AT+CMQPUB=0,\"" + String(MQTT_TOPIC_LAT) + "\",0,0,0," + String(latLen) + ",\"" + String(valueBuf) + "\"";
+  sendATCommand(pubLatCmd, 2000, DEBUG);
+
+  // Longitude
+  snprintf(valueBuf, sizeof(valueBuf), "%.6f", gpsData.longitude);
+  int lonLen = strlen(valueBuf);
+  String pubLonCmd = "AT+CMQPUB=0,\"" + String(MQTT_TOPIC_LON) + "\",0,0,0," + String(lonLen) + ",\"" + String(valueBuf) + "\"";
+  sendATCommand(pubLonCmd, 2000, DEBUG);
+
+  // Altitude
+  snprintf(valueBuf, sizeof(valueBuf), "%.2f", gpsData.altitude);
+  int altLen = strlen(valueBuf);
+  String pubAltCmd = "AT+CMQPUB=0,\"" + String(MQTT_TOPIC_ALT) + "\",0,0,0," + String(altLen) + ",\"" + String(valueBuf) + "\"";
+  sendATCommand(pubAltCmd, 2000, DEBUG);
+
+  // Speed
+  snprintf(valueBuf, sizeof(valueBuf), "%.2f", gpsData.speed);
+  int speedLen = strlen(valueBuf);
+  String pubSpeedCmd = "AT+CMQPUB=0,\"" + String(MQTT_TOPIC_SPEED) + "\",0,0,0," + String(speedLen) + ",\"" + String(valueBuf) + "\"";
+  sendATCommand(pubSpeedCmd, 2000, DEBUG);
+
+  // (Single JSON publish removed)
+  
   
   Serial.println("\n--- Publishing GPS Data via 4G MQTT ---");
   sendATCommand(pubCmd, 2000, DEBUG);

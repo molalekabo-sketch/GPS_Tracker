@@ -7,111 +7,179 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
 
-const PORT = 3000;
+// Web server port (separated from MQTT port 1883 to prevent conflicts)
+const WEB_PORT = 3000; 
+const brokerUrl = "mqtt://broker.hivemq.com";
 
-// Configure your target MQTT broker (Must match your ESP32 target script broker)
-const MQTT_BROKER = 'mqtt://broker.hivemq.com'; 
-const MQTT_TOPIC = 'telemetry/data';
+const options = {
+    port: 1883,                          // Standard unencrypted MQTT port
+    clientId: `server_client_${Math.random().toString(16).slice(3)}`, 
+    // No username/password since broker.hivemq.com is open/public
+    keepalive: 60,                       // Seconds between heartbeat packets
+    clean: true,                         // Forget transient subscriptions on disconnect
+    reconnectPeriod: 5000,               // Inter-reconnect interval in milliseconds
+    connectTimeout: 30 * 1000,           // Time to wait for a connack before failing
+};
+
+// ESP32 publishes GPS fields to 4 separate topics as plain strings (numbers)
+const MQTT_TOPICS = {
+  latitude: 'SimuTech/gps/latitude',
+  longitude: 'SimuTech/gps/longitude',
+  altitude: 'SimuTech/gps/altitude',
+  speed: 'SimuTech/gps/speed'
+};
+
+// Keep latest complete state for the UI
+let currentLocation = null; // { latitude, longitude, altitude, speed, timestamp }
+let coordinateHistory = []; // keep last 100 points
+const MAX_HISTORY = 100;
 
 // Middleware
 app.use(express.json());
 app.use(express.static('public'));
 
-// In-memory storage for coordinate history
-let coordinateHistory = [];
-let currentLocation = null;
-const MAX_HISTORY = 100; // Keep last 100 coordinates
+function parseNumber(payload) {
+  const n = parseFloat(payload);
+  return Number.isFinite(n) ? n : null;
+}
 
-// Initialize backend connection to the MQTT broker network
-const mqttClient = mqtt.connect(MQTT_BROKER);
+// Assemble latest telemetry from 4 topics
+const partial = {
+  latitude: null,
+  longitude: null,
+  altitude: null,
+  speed: null,
+};
+
+function emitIfReady() {
+  if (
+    partial.latitude === null ||
+    partial.longitude === null ||
+    partial.altitude === null ||
+    partial.speed === null
+  ) {
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const data = {
+    latitude: partial.latitude,
+    longitude: partial.longitude,
+    altitude: partial.altitude,
+    speed: partial.speed,
+    timestamp
+  };
+
+  currentLocation = data;
+
+  coordinateHistory.push({
+    ...data
+  });
+  if (coordinateHistory.length > MAX_HISTORY) coordinateHistory.shift();
+
+  // 🟢 NEW: Log the assembled data payload being sent to the browser
+  console.log('[SOCKET OUT] Emitting complete coordinate package to UI:', data);
+
+  // Stream to all open browser sessions
+  io.emit('location_update', data);
+}
+
+// MQTT connection
+const mqttClient = mqtt.connect(brokerUrl, options);
 
 mqttClient.on('connect', () => {
-    console.log(`Connected to MQTT Broker at ${MQTT_BROKER}`);
-    mqttClient.subscribe(MQTT_TOPIC, (err) => {
-        if (!err) {
-            console.log(`Successfully subscribed to topic: ${MQTT_TOPIC}`);
-        }
+  console.log(`Connected to MQTT Broker at ${brokerUrl}`);
+
+  const topics = Object.values(MQTT_TOPICS);
+  topics.forEach((t) => {
+    mqttClient.subscribe(t, { qos: 1 }, (err) => {
+      if (err) {
+        console.error(`Failed to subscribe to ${t}:`, err.message);
+      } else {
+        console.log(`Subscribed to ${t}`);
+      }
     });
+  });
 });
 
 mqttClient.on('message', (topic, message) => {
-    try {
-        // Expecting incoming payload text from ESP32: {"lat": -29.102057, "lon": 26.192797, "v_ext": 12.60}
-        const telemetryData = JSON.parse(message.toString());
-        console.log('Received Telemetry Packet:', telemetryData);
+  const rawPayload = message.toString().trim();
+  
+  // 🟢 NEW: Log the exact topic and payload as soon as it arrives
+  console.log(`[MQTT IN] Topic: ${topic} | Payload: ${rawPayload}`);
 
-        // Store location for API access
-        currentLocation = {
-            ...telemetryData,
-            timestamp: new Date().toISOString()
-        };
+  const n = parseNumber(rawPayload);
+  if (n === null) {
+    console.warn(`[WARNING] Non-numeric payload for ${topic}: '${rawPayload}'`);
+    return;
+  }
 
-        // Maintain history of coordinates for map overlay
-        coordinateHistory.push(currentLocation);
-        if (coordinateHistory.length > MAX_HISTORY) {
-            coordinateHistory.shift();
-        }
+  switch (topic) {
+    case MQTT_TOPICS.latitude:
+      partial.latitude = n;
+      break;
+    case MQTT_TOPICS.longitude:
+      partial.longitude = n;
+      break;
+    case MQTT_TOPICS.altitude:
+      partial.altitude = n;
+      break;
+    case MQTT_TOPICS.speed:
+      partial.speed = n;
+      break;
+    default:
+      return;
+  }
 
-        // Instantly stream coordinate data packet straight to open browser sessions
-        io.emit('location_update', telemetryData);
-    } catch (error) {
-        console.error('Error parsing incoming payload package string:', error.message);
-    }
+  emitIfReady();
 });
 
-// ============ API ENDPOINTS FOR MAP OVERLAY ============
+mqttClient.on('error', (err) => {
+  console.error('MQTT Client Error:', err.message);
+});
 
-// Get current asset location
+// ================== API ENDPOINTS FOR MAP OVERLAY ==================
+
 app.get('/api/location', (req, res) => {
-    if (!currentLocation) {
-        return res.status(404).json({ error: 'No location data available yet' });
-    }
-    res.json(currentLocation);
+  if (!currentLocation) return res.status(404).json({ error: 'No location data available yet' });
+  res.json(currentLocation);
 });
 
-// Get complete coordinate history for path/trail overlay
 app.get('/api/history', (req, res) => {
-    res.json({
-        count: coordinateHistory.length,
-        coordinates: coordinateHistory
-    });
+  res.json({ count: coordinateHistory.length, coordinates: coordinateHistory });
 });
 
-// Get summary statistics
 app.get('/api/stats', (req, res) => {
-    if (coordinateHistory.length === 0) {
-        return res.status(404).json({ error: 'No location data available' });
+  if (coordinateHistory.length === 0) return res.status(404).json({ error: 'No location data available' });
+
+  const lats = coordinateHistory.map(c => c.latitude);
+  const lons = coordinateHistory.map(c => c.longitude);
+  const alts = coordinateHistory.map(c => c.altitude);
+
+  res.json({
+    total_points: coordinateHistory.length,
+    current: currentLocation,
+    bounds: {
+      north: Math.max(...lats),
+      south: Math.min(...lats),
+      east: Math.max(...lons),
+      west: Math.min(...lons)
+    },
+    altitude_range: {
+      min: Math.min(...alts),
+      max: Math.max(...alts),
+      current: currentLocation.altitude
     }
-
-    const lats = coordinateHistory.map(c => c.lat);
-    const lons = coordinateHistory.map(c => c.lon);
-    const volts = coordinateHistory.map(c => c.v_ext);
-
-    res.json({
-        total_points: coordinateHistory.length,
-        current: currentLocation,
-        bounds: {
-            north: Math.max(...lats),
-            south: Math.min(...lats),
-            east: Math.max(...lons),
-            west: Math.min(...lons)
-        },
-        voltage_range: {
-            min: Math.min(...volts),
-            max: Math.max(...volts),
-            current: currentLocation.v_ext
-        }
-    });
+  });
 });
 
-// Manage browser instances opening the dashboard tab
 io.on('connection', (socket) => {
-    console.log('A user opened the tracker dashboard dashboard interface.');
-    socket.on('disconnect', () => {
-        console.log('User closed the tracker dashboard connection.');
-    });
+  console.log('User opened the tracker dashboard.');
+  socket.on('disconnect', () => {
+    console.log('User closed the tracker dashboard.');
+  });
 });
 
-server.listen(PORT, () => {
-    console.log(`Dashboard web server actively running at http://localhost:${PORT}`);
+server.listen(WEB_PORT, () => {
+  console.log(`Dashboard web server actively running at http://localhost:${WEB_PORT}`);
 });

@@ -272,10 +272,15 @@
         let lastGPSData = null;
 
         // HiveMQ Configuration
-        const MQTT_BROKER = 'wss://1e129245fe62491cb0e691c34b75ae34.s1.eu.hivemq.cloud:8884/mqtt';
+        // Public HiveMQ demo broker (websocket) - adjust if your browser MQTT transport differs
+        const MQTT_BROKER = 'wss://broker.hivemq.com:8884/mqtt';
         const MQTT_USER = 'admin';
         const MQTT_PASS = 'Admin12345';
-        const MQTT_TOPIC = 'SimuTech/gps/location';
+        const MQTT_TOPIC = 'SimuTech/gps/latitude';
+        // NOTE: server.js emits assembled JSON to the browser via Socket.IO,
+        // so direct browser MQTT subscription is outdated for multi-topic streaming.
+        // Keeping it only for backward compatibility.
+        
 
         // Await-first-fix state (avoid any generated/default coordinate data)
         let hasFirstFix = false;
