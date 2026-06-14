@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <HardwareSerial.h>
 #include <WiFi.h>
+#include <PubSubClient.h>
 
 // Developer Hardware Pin Definitions
 #define IO_RXD2        47   // ESP32-S3 RX <- Modem TX
@@ -10,31 +11,14 @@
 
 #define DEBUG true
 
-// --- Wi-Fi Credentials ---
-const char* ssid     = "MolaleK";
+// --- Wi-Fi Credentials (ACTIVE FOR TESTING) ---
+const char* ssid     = "Android LC";
 const char* password = "ncde1975";
 
-void setup_wifi() {
-  delay(10);
-  Serial.println();
-  Serial.print("Connecting to network: ");
-  Serial.println(ssid);
-
-  // 1. Set ESP32 Wi-Fi mode to Station (Client mode)
-  WiFi.mode(WIFI_STA); 
-  
-  // 2. Start the connection process
-  WiFi.begin(ssid, password);
-}
-
-// MQTT Configuration (HiveMQ Cloud - 4G Modem Native MQTT)
-// Public MQTT broker (no TLS)
+// --- MQTT Configuration ---
 const char MQTT_BROKER[] = "broker.hivemq.com";
 const int MQTT_PORT = 1883;
 
-// Public broker credentials not required
-const char MQTT_USER[] = "";
-const char MQTT_PASS[] = "";
 // Publish each GPS field on its own topic
 const char MQTT_TOPIC_LAT[] = "SimuTech/gps/latitude";
 const char MQTT_TOPIC_LON[] = "SimuTech/gps/longitude";
@@ -44,6 +28,10 @@ const char MQTT_CLIENT_ID[] = "ESP32S3_A7670_GPS_Tracker";
 const char MQTT_APN[] = "internet";  // Change to your SIM provider's APN
 
 HardwareSerial modem(2);    // Use Serial2 for the hardware connection
+
+// --- Wi-Fi MQTT Objects (ACTIVE FOR TESTING) ---
+WiFiClient espClient;
+PubSubClient client(espClient);
 
 unsigned long currentTime;
 unsigned long lastPublishTime = 0;
@@ -58,7 +46,6 @@ struct GPSData {
 
 /**
  * Send AT command to modem and wait for response
- * Developer's approach: captures full response
  */
 String sendATCommand(String command, const int timeout, boolean debug)
 {
@@ -85,29 +72,26 @@ String sendATCommand(String command, const int timeout, boolean debug)
 
 /**
  * Parse CGNSSINFO response and extract GPS coordinates
- * Format: +CGNSSINFO: <run>,<fix>,<date>,<time>,<lat>,<lon>,<alt>,<speed>,<course>,...
  */
-GPSData parseGPSResponse(String response)
+struct GPSData parseGPSResponse(String response)
 {
   GPSData data = {0, 0, 0, 0, false};
   
-  // Look for +CGNSSINFO: in response
   int startIndex = response.indexOf("+CGNSSINFO:");
   if (startIndex == -1) {
     Serial.println("GPS data not found in response");
     return data;
   }
   
-  // Extract the data portion
-  String dataStr = response.substring(startIndex + 11); // Skip "+CGNSSINFO:"
+  String dataStr = response.substring(startIndex + 11); 
   
-  // Split by comma and extract values
+  // The A7670E returns a lot of commas. We need to parse at least 15 parts.
   int commaCount = 0;
   int prevComma = 0;
   int currentComma = 0;
-  String parts[9];
+  String parts[15];
   
-  while (currentComma != -1 && commaCount < 9) {
+  while (currentComma != -1 && commaCount < 15) {
     currentComma = dataStr.indexOf(',', prevComma);
     if (currentComma == -1) {
       parts[commaCount] = dataStr.substring(prevComma);
@@ -119,13 +103,23 @@ GPSData parseGPSResponse(String response)
     commaCount++;
   }
   
-  // Check if we have valid GPS fix (fix_stat should be 1, 2, 3, or 4)
-  int fixStatus = parts[1].toInt();
-  if (fixStatus > 0) {
-    data.latitude = parts[4].toFloat();
-    data.longitude = parts[5].toFloat();
-    data.altitude = parts[6].toFloat();
-    data.speed = parts[7].toFloat();
+  // A7670E format places Latitude at index 5 and Longitude at index 7.
+  // Check if Latitude field has data (meaning we have a satellite fix)
+  if (parts[5].length() > 2) {
+    
+    // 1. Latitude (Index 5, N/S is Index 6)
+    float lat = parts[5].toFloat();
+    if (parts[6] == "S") lat = lat * -1.0; // South is negative
+    data.latitude = lat;
+    
+    // 2. Longitude (Index 7, E/W is Index 8)
+    float lon = parts[7].toFloat();
+    if (parts[8] == "W") lon = lon * -1.0; // West is negative
+    data.longitude = lon;
+
+    // 3. Altitude and Speed
+    data.altitude = parts[11].toFloat();
+    data.speed = parts[12].toFloat();
     data.isValid = true;
     
     Serial.print("Valid GPS Fix - Lat: ");
@@ -139,9 +133,40 @@ GPSData parseGPSResponse(String response)
   return data;
 }
 
+// --- WI-FI SETUP ROUTINE (ACTIVE FOR TESTING) ---
+void setup_wifi() {
+  delay(10);
+  Serial.println();
+  Serial.print("Connecting to Wi-Fi: ");
+  Serial.println(ssid);
+
+  WiFi.mode(WIFI_STA); 
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWi-Fi Connected.");
+}
+
+// --- WI-FI MQTT RECONNECT ROUTINE (ACTIVE FOR TESTING) ---
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("Attempting Wi-Fi MQTT connection...");
+    if (client.connect(MQTT_CLIENT_ID)) {
+      Serial.println("connected!");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      delay(5000);
+    }
+  }
+}
+
 /**
- * Publish GPS data to MQTT broker using modem's native MQTT
- * Format: AT+CMQPUB=client_index,"topic",qos,retain,dup,message_len,"message"
+ * Publish GPS data
  */
 void publishGPSData(GPSData gpsData)
 {
@@ -150,22 +175,34 @@ void publishGPSData(GPSData gpsData)
     return;
   }
 
-  // Create JSON payload with Google Maps URL
+  Serial.println("\n--- Publishing JSON GPS Data ---");
+
+  // Create one unified JSON string
   char payload[256];
-  snprintf(payload, sizeof(payload),
-    "{\"latitude\":%.6f,\"longitude\":%.6f,\"altitude\":%.2f,\"speed\":%.2f,\"maps_url\":\"https://maps.google.com/?q=%.6f,%.6f\"}",
-    gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.speed,
-    gpsData.latitude, gpsData.longitude
+  snprintf(payload, sizeof(payload), 
+    "{\"latitude\":%.6f,\"longitude\":%.6f,\"altitude\":%.2f,\"speed\":%.2f}",
+    gpsData.latitude, gpsData.longitude, gpsData.altitude, gpsData.speed
   );
 
-  int msgLen = strlen(payload);
-  
-  // Build AT command for MQTT publish
-  // Format: AT+CMQPUB=0,"topic",qos,retain,dup,len,"message"
-  // Publish the 4 fields as separate topics with plain string values.
+  // ========================================================
+  // WI-FI MQTT PUBLISH (ACTIVE FOR TESTING)
+  // ========================================================
+  client.publish("SimuTech/gps/location", payload);
 
-  char valueBuf[32];
+  // ========================================================
+  // CELLULAR AT-COMMAND PUBLISH (COMMENTED OUT FOR TESTING)
+  // ========================================================
+  /*
+  int payloadLen = strlen(payload);
+  String pubCmd = "AT+CMQPUB=0,\"SimuTech/gps/location\",0,0,0," + String(payloadLen) + ",\"" + String(payload) + "\"";
+  sendATCommand(pubCmd, 2000, DEBUG);
+  */
 
+
+  // ========================================================
+  // CELLULAR AT-COMMAND PUBLISH (COMMENTED OUT FOR TESTING)
+  // ========================================================
+  /*
   // Latitude
   snprintf(valueBuf, sizeof(valueBuf), "%.6f", gpsData.latitude);
   int latLen = strlen(valueBuf);
@@ -189,22 +226,16 @@ void publishGPSData(GPSData gpsData)
   int speedLen = strlen(valueBuf);
   String pubSpeedCmd = "AT+CMQPUB=0,\"" + String(MQTT_TOPIC_SPEED) + "\",0,0,0," + String(speedLen) + ",\"" + String(valueBuf) + "\"";
   sendATCommand(pubSpeedCmd, 2000, DEBUG);
-
-  // (Single JSON publish removed)
-  
-  
-  Serial.println("\n--- Publishing GPS Data via 4G MQTT ---");
-  sendATCommand(pubCmd, 2000, DEBUG);
+  */
 }
 
 void setup()
 {
-  // Initialize USB Serial for debugging
   Serial.begin(115200);
   delay(500);
-  Serial.println(F("\n\n--- Makerfabs ESP32-S3 A7670E GPS Tracker (4G MQTT) ---\n"));
+  Serial.println(F("\n\n--- Makerfabs ESP32-S3 A7670E Tracker (WI-FI TEST MODE) ---\n"));
 
-  // Set up modem control pins (Developer's approach)
+  // Set up modem control pins
   pinMode(IO_GSM_RST, OUTPUT);
   digitalWrite(IO_GSM_RST, LOW);
   
@@ -217,18 +248,26 @@ void setup()
   modem.begin(115200, SERIAL_8N1, IO_RXD2, IO_TXD2);
   delay(500);
 
-  // Wait for modem to fully boot
-  Serial.println("Waiting for modem to boot...");
+  Serial.println("Waiting for modem hardware to boot...");
   delay(12000);
 
-  // Test basic AT command responsiveness
-  Serial.println("Testing modem connection...");
+  Serial.println("Testing modem serial connection...");
   sendATCommand("AT", 1000, DEBUG);
   delay(500);
   sendATCommand("AT", 1000, DEBUG);
   delay(500);
 
-  // Get modem information
+  // ========================================================
+  // WI-FI & MQTT INITIALIZATION (ACTIVE FOR TESTING)
+  // ========================================================
+  setup_wifi();
+  client.setServer(MQTT_BROKER, MQTT_PORT);
+
+
+  // ========================================================
+  // CELLULAR NETWORK & MQTT INIT (COMMENTED OUT FOR TESTING)
+  // ========================================================
+  /*
   Serial.println("\nGetting modem information...");
   sendATCommand("AT+CICCID", 1000, DEBUG);
   delay(500);
@@ -239,47 +278,40 @@ void setup()
   sendATCommand("AT+GMR", 1000, DEBUG);
   delay(500);
 
-  // Configure network APN
   Serial.println("\nConfiguring cellular network...");
   String apnCmd = "AT+CGDCONT=1,\"IP\",\"" + String(MQTT_APN) + "\"";
   sendATCommand(apnCmd, 2000, DEBUG);
   delay(500);
 
-  // Verify network registration
   sendATCommand("AT+CGREG?", 2000, DEBUG);
   delay(1000);
 
-  // Initialize MQTT via modem's native MQTT
   Serial.println("\n[MQTT] Initializing MQTT connection via 4G Modem...");
-  
-  // Create MQTT instance: AT+CMQNEW="broker","port",keep_alive,buffer_size
   String mqNewCmd = "AT+CMQNEW=\"" + String(MQTT_BROKER) + "\",\"" + String(MQTT_PORT) + "\",60,1024";
   sendATCommand(mqNewCmd, 4000, DEBUG);
   delay(1000);
 
-  // Connect to MQTT broker with credentials
-  // Format: AT+CMQCON=client_index,mqtt_version,"client_id",keep_alive,clean_session,will_flag
   String mqConCmd = "AT+CMQCON=0,3,\"" + String(MQTT_CLIENT_ID) + "\",60,1,0";
   sendATCommand(mqConCmd, 5000, DEBUG);
   delay(1000);
+  */
 
-  // Enable and initialize GPS/GNSS Engine
+  // ========================================================
+  // GNSS/GPS INITIALIZATION (MUST REMAIN ACTIVE)
+  // ========================================================
   Serial.println("\n[GPS] Enabling GNSS Engine...");
   sendATCommand("AT+CGNSSPWR=1", 1000, DEBUG);
   delay(2000);
 
-  // Wait for GPS to be ready
   Serial.println("Waiting for GPS to acquire position...");
-  Serial.println("This may take 30-60 seconds for first fix...");
+  Serial.println("This may take 30-60 seconds for first fix (ensure you are outside!)...");
   delay(12000);
 
-  // Configure GPS parameters
   sendATCommand("AT+CGNSSIPR=9600", 1000, DEBUG);
   delay(500);
   sendATCommand("AT+CGNSSTST=1", 1000, DEBUG);
   delay(500);
 
-  // Get initial GPS information
   Serial.println("\nQuerying initial GPS data...");
   sendATCommand("AT+CGNSSINFO", 1000, DEBUG);
 
@@ -290,22 +322,27 @@ void setup()
 
 void loop()
 {
-  // Query and publish GPS position data every 5 seconds
+  // --- WI-FI MQTT KEEP-ALIVE ---
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+
+  // --- QUERY GPS AND PUBLISH ---
   if (millis() - currentTime > 5000)
   {
-    currentTime = millis(); // Refresh timer
+    currentTime = millis(); 
     Serial.println("\n--- Querying GPS Data ---");
     String gpsResponse = sendATCommand("AT+CGNSSINFO", 1000, DEBUG);
     
-    // Parse GPS response and publish to MQTT
     GPSData gpsData = parseGPSResponse(gpsResponse);
     if (gpsData.isValid) {
       publishGPSData(gpsData);
     }
   }
 
-  // Pass-through serial communication between USB and modem
-  // Allows manual AT commands from Serial Monitor
+  // --- SERIAL PASS-THROUGH FOR DEBUGGING ---
   while (Serial.available() > 0) {
     modem.write(Serial.read());
     yield();
