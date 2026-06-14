@@ -19,11 +19,8 @@ const char* password = "ncde1975";
 const char MQTT_BROKER[] = "broker.hivemq.com";
 const int MQTT_PORT = 1883;
 
-// Publish each GPS field on its own topic
-const char MQTT_TOPIC_LAT[] = "SimuTech/gps/latitude";
-const char MQTT_TOPIC_LON[] = "SimuTech/gps/longitude";
-const char MQTT_TOPIC_ALT[] = "SimuTech/gps/altitude";
-const char MQTT_TOPIC_SPEED[] = "SimuTech/gps/speed";
+// Publish unified JSON location payload to a single topic
+const char MQTT_LOCATION_TOPIC[] = "SimuTech/gps/location";
 const char MQTT_CLIENT_ID[] = "ESP32S3_A7670_GPS_Tracker";
 const char MQTT_APN[] = "internet";  // Change to your SIM provider's APN
 
@@ -187,7 +184,11 @@ void publishGPSData(GPSData gpsData)
   // ========================================================
   // WI-FI MQTT PUBLISH (ACTIVE FOR TESTING)
   // ========================================================
-  client.publish("SimuTech/gps/location", payload);
+  client.publish(MQTT_LOCATION_TOPIC, payload);
+
+  // NOTE: topic-specific publishes for latitude/longitude/altitude/speed were removed
+  // since this firmware now publishes a single JSON payload to MQTT_LOCATION_TOPIC.
+
 
   // ========================================================
   // CELLULAR AT-COMMAND PUBLISH (COMMENTED OUT FOR TESTING)
@@ -203,29 +204,11 @@ void publishGPSData(GPSData gpsData)
   // CELLULAR AT-COMMAND PUBLISH (COMMENTED OUT FOR TESTING)
   // ========================================================
   /*
-  // Latitude
-  snprintf(valueBuf, sizeof(valueBuf), "%.6f", gpsData.latitude);
-  int latLen = strlen(valueBuf);
-  String pubLatCmd = "AT+CMQPUB=0,\"" + String(MQTT_TOPIC_LAT) + "\",0,0,0," + String(latLen) + ",\"" + String(valueBuf) + "\"";
-  sendATCommand(pubLatCmd, 2000, DEBUG);
-
-  // Longitude
-  snprintf(valueBuf, sizeof(valueBuf), "%.6f", gpsData.longitude);
-  int lonLen = strlen(valueBuf);
-  String pubLonCmd = "AT+CMQPUB=0,\"" + String(MQTT_TOPIC_LON) + "\",0,0,0," + String(lonLen) + ",\"" + String(valueBuf) + "\"";
-  sendATCommand(pubLonCmd, 2000, DEBUG);
-
-  // Altitude
-  snprintf(valueBuf, sizeof(valueBuf), "%.2f", gpsData.altitude);
-  int altLen = strlen(valueBuf);
-  String pubAltCmd = "AT+CMQPUB=0,\"" + String(MQTT_TOPIC_ALT) + "\",0,0,0," + String(altLen) + ",\"" + String(valueBuf) + "\"";
-  sendATCommand(pubAltCmd, 2000, DEBUG);
-
-  // Speed
-  snprintf(valueBuf, sizeof(valueBuf), "%.2f", gpsData.speed);
-  int speedLen = strlen(valueBuf);
-  String pubSpeedCmd = "AT+CMQPUB=0,\"" + String(MQTT_TOPIC_SPEED) + "\",0,0,0," + String(speedLen) + ",\"" + String(valueBuf) + "\"";
-  sendATCommand(pubSpeedCmd, 2000, DEBUG);
+  // Cellular AT-command publish (deprecated per-field topics cleanup)
+  // This firmware currently publishes one unified JSON payload to:
+  //   MQTT_LOCATION_TOPIC = "SimuTech/gps/location"
+  //
+  // Re-enable/implement a single publish command if you need 4G mode.
   */
 }
 

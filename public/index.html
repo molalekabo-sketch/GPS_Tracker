@@ -8,11 +8,12 @@
     <!-- Leaflet Map Library (Open-source, no API key needed) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-    
-    <!-- MQTT.js for real-time GPS updates -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
-    
+
+    <!-- Socket.IO client (served by server.js) -->
+    <script src="/socket.io/socket.io.js"></script>
+
     <style>
+
         * {
             margin: 0;
             padding: 0;
@@ -218,7 +219,14 @@
         <div class="telemetry-row">
             <span class="telemetry-label">Voltage:</span>
             <span class="telemetry-value" id="volt-value">--</span>
-
+        </div>
+        <div class="telemetry-row">
+            <span class="telemetry-label">Altitude:</span>
+            <span class="telemetry-value" id="alt-value">--</span>
+        </div>
+        <div class="telemetry-row">
+            <span class="telemetry-label">Speed:</span>
+            <span class="telemetry-value" id="speed-value">--</span>
         </div>
         <div class="telemetry-row">
             <span class="telemetry-label">Last Update:</span>
@@ -271,15 +279,9 @@
         let currentFormat = 'dd'; // Decimal Degrees by default
         let lastGPSData = null;
 
-        // HiveMQ Configuration
-        // Public HiveMQ demo broker (websocket) - adjust if your browser MQTT transport differs
-        const MQTT_BROKER = 'wss://broker.hivemq.com:8884/mqtt';
-        const MQTT_USER = 'admin';
-        const MQTT_PASS = 'Admin12345';
-        const MQTT_TOPIC = 'SimuTech/gps/latitude';
-        // NOTE: server.js emits assembled JSON to the browser via Socket.IO,
-        // so direct browser MQTT subscription is outdated for multi-topic streaming.
-        // Keeping it only for backward compatibility.
+        // Socket.IO configuration (GPS pipeline is: ESP32 -> MQTT -> server.js -> Socket.IO -> UI)
+        // server.js emits: "location_update" with { latitude, longitude, altitude, speed, timestamp }
+
         
 
         // Await-first-fix state (avoid any generated/default coordinate data)
@@ -331,67 +333,28 @@
             }
         }
 
-        // Initialize MQTT connection
-        function initMQTT() {
-            try {
-                mqttClient = new Paho.MQTT.Client(MQTT_BROKER, 'esp32_gps_web_' + Math.random().toString(16).substr(2, 8));
-                
-                mqttClient.onConnectionLost = onConnectionLost;
-                mqttClient.onMessageArrived = onMessageArrived;
+        // Socket.IO client: receives complete assembled coordinates from server.js
+        function initSocket() {
+            // server.js serves socket.io on the same origin
+            const socket = io();
 
-                // Connect options
-                const connectOptions = {
-                    onSuccess: onConnectSuccess,
-                    onFailure: onConnectFailure,
-                    useSSL: true,
-                    userName: MQTT_USER,
-                    password: MQTT_PASS,
-                    reconnect: true,
-                    cleanSession: true
-                };
+            socket.on('connect', () => {
+                console.log('[UI] Socket.IO connected:', socket.id);
+                document.querySelector('.status-indicator').classList.remove('disconnected');
+            });
 
-                mqttClient.connect(connectOptions);
-                console.log('Attempting MQTT connection to HiveMQ...');
-            } catch (err) {
-                console.error('MQTT connection error:', err);
-            }
-        }
-
-        function onConnectSuccess() {
-            console.log('Connected to HiveMQ!');
-            document.querySelector('.status-indicator').classList.remove('disconnected');
-            isConnected = true;
-            
-            // Subscribe to GPS topic
-            mqttClient.subscribe(MQTT_TOPIC, { qos: 1 });
-            console.log('Subscribed to topic:', MQTT_TOPIC);
-        }
-
-        function onConnectFailure(response) {
-            console.error('MQTT connection failed:', response.errorMessage);
-            document.querySelector('.status-indicator').classList.add('disconnected');
-            isConnected = false;
-        }
-
-        function onConnectionLost(responseObject) {
-            if (responseObject.errorCode !== 0) {
-                console.log('Connection lost:', responseObject.errorMessage);
+            socket.on('disconnect', () => {
+                console.log('[UI] Socket.IO disconnected');
                 document.querySelector('.status-indicator').classList.add('disconnected');
-                isConnected = false;
-            }
+            });
+
+            socket.on('location_update', (data) => {
+                // data shape from server.js: { latitude, longitude, altitude, speed, timestamp }
+                lastGPSData = data;
+                updateDisplay(data);
+            });
         }
 
-        function onMessageArrived(message) {
-            try {
-                const payload = JSON.parse(message.payloadString);
-                console.log('GPS Data received:', payload);
-                
-                lastGPSData = payload;
-                updateDisplay(payload);
-            } catch (err) {
-                console.error('Error parsing GPS data:', err);
-            }
-        }
 
         function updateDisplay(data) {
             // ESP32 publishes: {"latitude":...,"longitude":...,"altitude":...,"speed":...}
@@ -445,9 +408,17 @@
             // Update telemetry display with formatted coordinates
             document.getElementById('lat-value').textContent = formattedCoords.lat;
             document.getElementById('lon-value').textContent = formattedCoords.lon;
-            // Your current UI label is "Voltage" but ESP32 firmware sends altitude/speed.
-            document.getElementById('volt-value').textContent = data.altitude ? `${parseFloat(data.altitude).toFixed(2)} m` : 'N/A';
+
+            // Keep existing Voltage label, but map it to altitude (legacy UI behavior)
+            const altNum = data.altitude !== undefined && data.altitude !== null ? parseFloat(data.altitude) : NaN;
+            const speedNum = data.speed !== undefined && data.speed !== null ? parseFloat(data.speed) : NaN;
+
+            document.getElementById('volt-value').textContent = Number.isFinite(altNum) ? '--' : 'N/A';
+            document.getElementById('alt-value').textContent = Number.isFinite(altNum) ? `${altNum.toFixed(2)} m` : 'N/A';
+            document.getElementById('speed-value').textContent = Number.isFinite(speedNum) ? `${speedNum.toFixed(2)} m/s` : 'N/A';
+
             document.getElementById('time-value').textContent = timestamp.toLocaleTimeString();
+
 
             // Update statistics
             updateStats();
@@ -490,10 +461,11 @@
 
             console.log('Map initialized (awaiting first GPS fix)');
 
-            // Initialize MQTT connection
-            initMQTT();
+            // Initialize Socket.IO connection
+            initSocket();
 
         }
+
 
         // Update stats panel
         function updateStats() {

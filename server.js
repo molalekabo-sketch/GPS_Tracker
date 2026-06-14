@@ -22,11 +22,9 @@ const options = {
 };
 
 // ESP32 publishes GPS fields to 4 separate topics as plain strings (numbers)
+// Single JSON payload topic published by gps_tracker.ino
 const MQTT_TOPICS = {
-  latitude: 'SimuTech/gps/latitude',
-  longitude: 'SimuTech/gps/longitude',
-  altitude: 'SimuTech/gps/altitude',
-  speed: 'SimuTech/gps/speed'
+  location: 'SimuTech/gps/location'
 };
 
 // Keep latest complete state for the UI
@@ -43,46 +41,25 @@ function parseNumber(payload) {
   return Number.isFinite(n) ? n : null;
 }
 
-// Assemble latest telemetry from 4 topics
-const partial = {
-  latitude: null,
-  longitude: null,
-  altitude: null,
-  speed: null,
-};
-
-function emitIfReady() {
-  if (
-    partial.latitude === null ||
-    partial.longitude === null ||
-    partial.altitude === null ||
-    partial.speed === null
-  ) {
-    return;
-  }
-
-  const timestamp = new Date().toISOString();
-  const data = {
-    latitude: partial.latitude,
-    longitude: partial.longitude,
-    altitude: partial.altitude,
-    speed: partial.speed,
+function emitLocationData(data) {
+  const timestamp = data.timestamp || new Date().toISOString();
+  const payload = {
+    latitude: data.latitude,
+    longitude: data.longitude,
+    altitude: data.altitude,
+    speed: data.speed,
     timestamp
   };
 
-  currentLocation = data;
+  currentLocation = payload;
 
-  coordinateHistory.push({
-    ...data
-  });
+  coordinateHistory.push({ ...payload });
   if (coordinateHistory.length > MAX_HISTORY) coordinateHistory.shift();
 
-  // 🟢 NEW: Log the assembled data payload being sent to the browser
-  console.log('[SOCKET OUT] Emitting complete coordinate package to UI:', data);
-
-  // Stream to all open browser sessions
-  io.emit('location_update', data);
+  console.log('[SOCKET OUT] Emitting complete coordinate package to UI:', payload);
+  io.emit('location_update', payload);
 }
+
 
 // MQTT connection
 const mqttClient = mqtt.connect(brokerUrl, options);
@@ -104,35 +81,34 @@ mqttClient.on('connect', () => {
 
 mqttClient.on('message', (topic, message) => {
   const rawPayload = message.toString().trim();
-  
-  // 🟢 NEW: Log the exact topic and payload as soon as it arrives
+
   console.log(`[MQTT IN] Topic: ${topic} | Payload: ${rawPayload}`);
 
-  const n = parseNumber(rawPayload);
-  if (n === null) {
-    console.warn(`[WARNING] Non-numeric payload for ${topic}: '${rawPayload}'`);
+  if (topic !== MQTT_TOPICS.location) return;
+
+  // gps_tracker.ino publishes unified JSON:
+  // {"latitude":...,"longitude":...,"altitude":...,"speed":...}
+  let obj;
+  try {
+    obj = JSON.parse(rawPayload);
+  } catch (e) {
+    console.warn('[WARNING] Failed to parse JSON from MQTT payload:', e.message);
     return;
   }
 
-  switch (topic) {
-    case MQTT_TOPICS.latitude:
-      partial.latitude = n;
-      break;
-    case MQTT_TOPICS.longitude:
-      partial.longitude = n;
-      break;
-    case MQTT_TOPICS.altitude:
-      partial.altitude = n;
-      break;
-    case MQTT_TOPICS.speed:
-      partial.speed = n;
-      break;
-    default:
-      return;
+  const lat = parseNumber(obj.latitude);
+  const lon = parseNumber(obj.longitude);
+  const alt = parseNumber(obj.altitude);
+  const speed = parseNumber(obj.speed);
+
+  if (![lat, lon, alt, speed].every((v) => v !== null)) {
+    console.warn('[WARNING] Missing/invalid fields in MQTT JSON payload:', obj);
+    return;
   }
 
-  emitIfReady();
+  emitLocationData({ latitude: lat, longitude: lon, altitude: alt, speed: speed });
 });
+
 
 mqttClient.on('error', (err) => {
   console.error('MQTT Client Error:', err.message);
