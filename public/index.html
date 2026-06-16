@@ -31,6 +31,52 @@
             width: 100%;
         }
 
+        /* Make panels compact on portrait/small screens */
+        @media (orientation: portrait), (max-width: 520px) {
+            #map {
+                height: 60vh;
+            }
+
+            #telemetry-panel,
+            #stats-panel {
+                left: 12px;
+                right: 12px;
+                width: auto;
+                top: auto;
+            }
+
+            #telemetry-panel {
+                bottom: 140px;
+                min-width: 0;
+            }
+
+            #stats-panel {
+                bottom: 220px;
+                top: auto;
+                min-width: 0;
+            }
+
+            #control-panel {
+                left: 12px;
+                right: 12px;
+                bottom: 12px;
+                padding: 10px;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+
+            button {
+                padding: 8px 10px;
+                font-size: 11px;
+            }
+
+            #format-toggle {
+                right: 12px;
+                bottom: 190px;
+            }
+        }
+
+
         /* Telemetry Overlay Panel */
         #telemetry-panel {
             position: absolute;
@@ -235,32 +281,59 @@
     </div>
 
     <!-- Statistics Panel -->
-    <div id="stats-panel">
-        <h3>📊 Track Statistics</h3>
-        <div class="stat-item">
-            <span class="stat-label">Points Tracked:</span>
-            <span class="stat-value" id="stat-points">0</span>
+        <div id="stats-panel">
+            <h3>📊 Track Statistics</h3>
+            <div class="stat-item">
+                <span class="stat-label">Points Tracked:</span>
+                <span class="stat-value" id="stat-points">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Distance (km):</span>
+                <span class="stat-value" id="stat-distance">--</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Time Elapsed (s):</span>
+                <span class="stat-value" id="stat-time">--</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Average Speed:</span>
+                <span class="stat-value" id="stat-avg-speed">--</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Voltage (Min):</span>
+                <span class="stat-value" id="stat-volt-min">--</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Voltage (Max):</span>
+                <span class="stat-value" id="stat-volt-max">--</span>
+            </div>
         </div>
-        <div class="stat-item">
-            <span class="stat-label">Voltage (Min):</span>
-            <span class="stat-value" id="stat-volt-min">--</span>
-        </div>
-        <div class="stat-item">
-            <span class="stat-label">Voltage (Max):</span>
-            <span class="stat-value" id="stat-volt-max">--</span>
-        </div>
-        <div class="stat-item">
-            <span class="stat-label">Coverage:</span>
-            <span class="stat-value" id="stat-coverage">-- km</span>
-        </div>
+
+<div id="control-panel" style="display: flex; flex-direction: column; gap: 10px; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: fit-content;">
+    
+    <!-- Row 1: Map Operations -->
+    <div style="display: flex; gap: 8px; align-items: center;">
+        <button onclick="centerMap()" title="Center Map" style="padding: 6px 12px; cursor: pointer; flex: 1;">📍 Center Map</button>
+        <button onclick="clearTrack()" title="Clear Track" style="padding: 6px 12px; cursor: pointer; flex: 1;">🗑️ Clear Track</button>
+    </div>
+    
+    <!-- Row 2: File Operations -->
+    <div style="display: flex; gap: 8px; align-items: center;">
+        <button onclick="downloadTrack()" title="Export Data" style="padding: 6px 12px; cursor: pointer; flex: 1; background: #343a40; border: 1px solid #495057; border-radius: 4px; font-size: 13px; color: #ffffff; font-family: sans-serif;">⬇️Export</button>
+        <label title="Upload Data" style="padding: 6px 12px; cursor: pointer; flex: 1; background: #343a40; border: 1px solid #495057; border-radius: 4px; font-size: 13px; color: #ffffff; text-align: center; box-sizing: border-box; font-family: sans-serif; display: inline-block;">
+            ⬆️ Upload <input id="csv-file" type="file" accept=".csv" style="display: none;" onchange="uploadTrackCSV()" />
+        </label>
+    </div>
+    
+    <!-- Row 3: Stopwatch Media Controls -->
+    <div style="display: flex; gap: 8px; align-items: center;">
+        <button onclick="startStopwatch()" title="Start/Play" style="padding: 8px 16px; border: 1px solid #c8e6c9; border-radius: 4px; cursor: pointer; flex: 1; font-weight: bold;">▶️ Start</button>
+        <button onclick="stopStopwatch()" title="Stop Track" style="padding: 8px 16px; border: 1px solid #ffcdd2; border-radius: 4px; cursor: pointer; flex: 1; font-weight: bold;">🔲 Stop</button>
     </div>
 
-    <!-- Control Buttons -->
-    <div id="control-panel">
-        <button onclick="clearTrack()">🗑️ Clear Track</button>
-        <button onclick="centerMap()">📍 Center Map</button>
-        <button onclick="downloadTrack()">⬇️ Export Data</button>
-    </div>
+</div>
+
+
 
     <!-- Format Toggle -->
     <div id="format-toggle">
@@ -467,34 +540,138 @@
         }
 
 
-        // Update stats panel
-        function updateStats() {
-            if (coordinateHistory.length === 0) return;
+        // Stopwatch state
+        let isTiming = false;
+        let timingStartMs = null;
+        let timingEndMs = null;
 
-            // Ensure we have valid numeric points before computing coverage
-            for (const c of coordinateHistory) {
+        function getSegmentPoints() {
+            // If never started: full history.
+            if (!isTiming && timingEndMs === null) return coordinateHistory;
+            if (!coordinateHistory.length) return [];
+
+            const startMs = timingStartMs;
+            const endMs = timingEndMs; // null while running
+            if (!Number.isFinite(startMs)) return [];
+
+            const endBound = (endMs === null) ? Infinity : endMs;
+
+            return coordinateHistory.filter((p) => {
+                const t = p.timestamp ? Date.parse(p.timestamp) : NaN;
+                return Number.isFinite(t) && t >= startMs && t <= endBound;
+            });
+        }
+
+        // Control Functions
+        function clearTrack() {
+            coordinateHistory = [];
+            polyline.setLatLngs([]);
+            document.getElementById('stat-points').textContent = '0';
+            console.log('Track cleared');
+        }
+
+        function updateStats() {
+            const segment = getSegmentPoints();
+            if (!segment || segment.length === 0) return;
+
+            // Ensure we have valid numeric points before computing distance/time
+            for (const c of segment) {
                 if (!Number.isFinite(Number(c.lat)) || !Number.isFinite(Number(c.lon))) return;
             }
 
-
-            const lats = coordinateHistory.map(c => c.lat);
-            const lons = coordinateHistory.map(c => c.lon);
-
             // Calculate approximate distance (simple Euclidean)
-            let totalDistance = 0;
-            for (let i = 1; i < coordinateHistory.length; i++) {
-                const prev = coordinateHistory[i - 1];
-                const curr = coordinateHistory[i];
+            let totalDistanceKm = 0;
+            for (let i = 1; i < segment.length; i++) {
+                const prev = segment[i - 1];
+                const curr = segment[i];
                 const latDiff = (curr.lat - prev.lat) * 111; // 1° lat ≈ 111 km
                 const lonDiff = (curr.lon - prev.lon) * 111 * Math.cos(curr.lat * Math.PI / 180);
-                totalDistance += Math.sqrt(latDiff * latDiff + lonDiff * lonDiff);
+                totalDistanceKm += Math.sqrt(latDiff * latDiff + lonDiff * lonDiff);
             }
 
-            document.getElementById('stat-points').textContent = coordinateHistory.length;
-            document.getElementById('stat-volt-min').textContent = '--';
-            document.getElementById('stat-volt-max').textContent = '--';
-            document.getElementById('stat-coverage').textContent = totalDistance.toFixed(2);
+            const firstTs = segment[0].timestamp;
+            const lastTs = segment[segment.length - 1].timestamp;
+            const firstMs = firstTs ? Date.parse(firstTs) : NaN;
+            const lastMs = lastTs ? Date.parse(lastTs) : NaN;
+
+            // elapsedSec is derived strictly from the timestamps in the segment
+            // (handles irregular sampling intervals)
+            let elapsedSec = 0;
+            if (Number.isFinite(firstMs) && Number.isFinite(lastMs) && lastMs >= firstMs) {
+                elapsedSec = (lastMs - firstMs) / 1000;
+            }
+
+            const avgSpeedMps = (Number.isFinite(elapsedSec) && elapsedSec > 0)
+                ? ((totalDistanceKm * 1000) / elapsedSec)
+                : null;
+
+
+            // Stats UI
+            const pointsEl = document.getElementById('stat-points');
+            if (pointsEl) pointsEl.textContent = segment.length;
+
+            const distEl = document.getElementById('stat-distance');
+            if (distEl) distEl.textContent = totalDistanceKm.toFixed(2);
+
+            const timeEl = document.getElementById('stat-time');
+            if (timeEl) {
+                if (!Number.isFinite(elapsedSec) || elapsedSec < 0) {
+                    timeEl.textContent = '--';
+                } else {
+                    const totalSeconds = Math.floor(elapsedSec);
+                    const hours = Math.floor(totalSeconds / 3600);
+                    const minutes = Math.floor((totalSeconds % 3600) / 60);
+                    const seconds = totalSeconds % 60;
+                    const pad2 = (n) => String(n).padStart(2, '0');
+                    timeEl.textContent = `${hours}:${pad2(minutes)}:${pad2(seconds)}`;
+                }
+            }
+
+
+            const avgEl = document.getElementById('stat-avg-speed');
+            if (avgEl) {
+                if (avgSpeedMps === null) {
+                    avgEl.textContent = '--';
+                } else {
+                    const avgSpeedKmh = avgSpeedMps * 3.6;
+                    avgEl.textContent = `${avgSpeedKmh.toFixed(2)} km/h`;
+                }
+            }
+
+
+            // Keep legacy voltage placeholders
+            const voltMinEl = document.getElementById('stat-volt-min');
+            if (voltMinEl) voltMinEl.textContent = '--';
+            const voltMaxEl = document.getElementById('stat-volt-max');
+            if (voltMaxEl) voltMaxEl.textContent = '--';
         }
+
+        function startStopwatch() {
+            if (coordinateHistory.length === 0) return;
+            // Use current point's timestamp as start.
+            const latest = coordinateHistory[coordinateHistory.length - 1];
+            const t = latest.timestamp ? Date.parse(latest.timestamp) : NaN;
+            if (!Number.isFinite(t)) {
+                alert('Cannot start: invalid timestamp in data');
+                return;
+            }
+            isTiming = true;
+            timingStartMs = t;
+            timingEndMs = null;
+        }
+
+        function stopStopwatch() {
+            if (!isTiming) return;
+            const latest = coordinateHistory[coordinateHistory.length - 1];
+            const t = latest.timestamp ? Date.parse(latest.timestamp) : NaN;
+            if (!Number.isFinite(t)) return;
+            timingEndMs = t;
+            isTiming = false;
+        }
+
+        // Prevent duplicate clearTrack definition by removing below old control section.
+
+
 
         // Control Functions
         function clearTrack() {
@@ -526,6 +703,43 @@
             a.href = url;
             a.download = `gps-track-${new Date().toISOString().slice(0, 10)}.csv`;
             a.click();
+        }
+
+        async function uploadTrackCSV() {
+            const input = document.getElementById('csv-file');
+            if (!input || !input.files || input.files.length === 0) {
+                alert('Select a CSV file first');
+                return;
+            }
+
+            const file = input.files[0];
+            if (!file.name.toLowerCase().endsWith('.csv')) {
+                alert('Please upload a .csv file');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('csv', file);
+
+            try {
+                const resp = await fetch('/api/upload-csv', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await resp.json().catch(() => null);
+                if (!resp.ok) {
+                    alert((data && data.error) ? data.error : 'Upload failed');
+                    return;
+                }
+
+                // server overwrites history and emits last point
+                clearTrack();
+                alert(`Upload successful: loaded ${data.points_loaded} points`);
+            } catch (e) {
+                console.error('uploadTrackCSV error:', e);
+                alert('Upload failed due to a network/server error');
+            }
         }
 
         // Initialize on page load

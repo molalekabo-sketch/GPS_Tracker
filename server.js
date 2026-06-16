@@ -32,7 +32,7 @@ const MQTT_TOPICS = {
 // Keep latest complete state for the UI
 let currentLocation = null; // { latitude, longitude, altitude, speed, timestamp }
 let coordinateHistory = []; // keep last 100 points
-const MAX_HISTORY = 100;
+const MAX_HISTORY = 150;
 
 // Middleware
 app.use(express.json());
