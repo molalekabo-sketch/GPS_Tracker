@@ -2,6 +2,8 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const mqtt = require('mqtt');
+const multer = require('multer');
+
 
 const app = express();
 const server = http.createServer(app);
@@ -144,10 +146,106 @@ app.get('/api/stats', (req, res) => {
     altitude_range: {
       min: Math.min(...alts),
       max: Math.max(...alts),
-      current: currentLocation.altitude
+      current: currentLocation ? currentLocation.altitude : null
     }
   });
 });
+
+// ================== CSV UPLOAD ==================
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+
+function parseCSVLine(line) {
+  // Minimal CSV parser for our expected format:
+  // Latitude,Longitude,Altitude,Speed,Timestamp
+  // Timestamp may be wrapped in double-quotes.
+  const out = [];
+  let cur = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (ch === ',' && !inQuotes) {
+      out.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+app.post('/api/upload-csv', upload.single('csv'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Missing csv file upload (field name: csv)' });
+
+    const text = req.file.buffer.toString('utf8');
+    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) return res.status(400).json({ error: 'CSV must contain a header row and at least one data row' });
+
+    const header = parseCSVLine(lines[0]).map(h => h.trim());
+    const expected = ['Latitude', 'Longitude', 'Altitude', 'Speed', 'Timestamp'];
+    const headerOk = expected.every((h, idx) => header[idx] === h);
+    if (!headerOk) {
+      return res.status(400).json({
+        error: 'Invalid CSV header. Expected: ' + expected.join(', '),
+        received: header
+      });
+    }
+
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const parts = parseCSVLine(lines[i]);
+      if (parts.length < 5) continue;
+
+      const [Latitude, Longitude, Altitude, Speed, Timestamp] = parts;
+
+      const lat = parseNumber(Latitude);
+      const lon = parseNumber(Longitude);
+      const alt = parseNumber(Altitude);
+      const speed = parseNumber(Speed);
+
+      if ([lat, lon, alt, speed].some(v => v === null)) {
+        continue;
+      }
+
+      rows.push({
+        latitude: lat,
+        longitude: lon,
+        altitude: alt,
+        speed: speed,
+        timestamp: Timestamp ? Timestamp.trim() : new Date().toISOString()
+      });
+    }
+
+    if (rows.length === 0) return res.status(400).json({ error: 'No valid rows found in CSV' });
+
+    // Overwrite existing track with uploaded data
+    coordinateHistory = [];
+    rows.slice(-MAX_HISTORY).forEach(p => {
+      coordinateHistory.push(p);
+    });
+
+    currentLocation = coordinateHistory[coordinateHistory.length - 1];
+
+    // Emit every uploaded point in order so the UI can draw the full polyline.
+    // (UI will also update marker/stats per point.)
+    coordinateHistory.forEach((p) => {
+      io.emit('location_update', p);
+    });
+
+    return res.json({ ok: true, points_loaded: coordinateHistory.length });
+  } catch (e) {
+    console.error('upload-csv failed:', e);
+    return res.status(500).json({ error: 'Failed to upload/parse CSV' });
+  }
+});
+
 
 io.on('connection', (socket) => {
   console.log('User opened the tracker dashboard.');
