@@ -1,42 +1,31 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const socketIo = require('socket.io');
-const mqtt = require('mqtt');
 const multer = require('multer');
-
+const { SerialPort } = require('serialport');
+const { parseGpsFrame, formatSerialError } = require('./serialParser');
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
 
-// Web server port (separated from MQTT port 1883 to prevent conflicts)
-const WEB_PORT = 3000; 
-const brokerUrl = "mqtt://broker.hivemq.com";
+const WEB_PORT = process.env.PORT || 3000;
+const BAUD_RATE = 115200;
 
-const options = {
-    port: 1883,                          // Standard unencrypted MQTT port
-    clientId: `server_client_${Math.random().toString(16).slice(3)}`, 
-    // No username/password since broker.hivemq.com is open/public
-    keepalive: 60,                       // Seconds between heartbeat packets
-    clean: true,                         // Forget transient subscriptions on disconnect
-    reconnectPeriod: 5000,               // Inter-reconnect interval in milliseconds
-    connectTimeout: 30 * 1000,           // Time to wait for a connack before failing
-};
-
-// ESP32 publishes GPS fields to 4 separate topics as plain strings (numbers)
-// Single JSON payload topic published by gps_tracker.ino
-const MQTT_TOPICS = {
-  location: 'SimuTech/gps/location'
-};
-
-// Keep latest complete state for the UI
-let currentLocation = null; // { latitude, longitude, altitude, speed, timestamp }
-let coordinateHistory = []; // keep last 100 points
+let currentLocation = null;
+let coordinateHistory = [];
 const MAX_HISTORY = 150;
 
-// Middleware
+let serialPort = null;
+let serialPortPath = null;
+let serialPortStatus = 'disconnected';
+let serialPortError = null;
+let availablePorts = [];
+
 app.use(express.json());
-app.use(express.static('public'));
+app.use('/vendor', express.static(path.join(__dirname, 'node_modules')));
+app.use(express.static(path.join(__dirname, 'public')));
 
 function parseNumber(payload) {
   const n = parseFloat(payload);
@@ -50,6 +39,7 @@ function emitLocationData(data) {
     longitude: data.longitude,
     altitude: data.altitude,
     speed: data.speed,
+    isBacklog: Boolean(data.isBacklog),
     timestamp
   };
 
@@ -62,61 +52,133 @@ function emitLocationData(data) {
   io.emit('location_update', payload);
 }
 
+function broadcastSerialStatus(details) {
+  io.emit('serial_status', {
+    connected: serialPortStatus === 'connected',
+    status: serialPortStatus,
+    port: serialPortPath,
+    error: serialPortError,
+    ...details
+  });
+}
 
-// MQTT connection
-const mqttClient = mqtt.connect(brokerUrl, options);
+function setSerialStatus(status, error = null) {
+  serialPortStatus = status;
+  serialPortError = error;
+  broadcastSerialStatus({});
+}
 
-mqttClient.on('connect', () => {
-  console.log(`Connected to MQTT Broker at ${brokerUrl}`);
+async function refreshAvailablePorts() {
+  try {
+    const ports = await SerialPort.list();
+    availablePorts = ports.map((port) => port.path);
+    return availablePorts;
+  } catch (error) {
+    console.error('Unable to inspect serial ports:', error.message);
+    availablePorts = [];
+    return [];
+  }
+}
 
-  const topics = Object.values(MQTT_TOPICS);
-  topics.forEach((t) => {
-    mqttClient.subscribe(t, { qos: 1 }, (err) => {
-      if (err) {
-        console.error(`Failed to subscribe to ${t}:`, err.message);
-      } else {
-        console.log(`Subscribed to ${t}`);
-      }
+function handleIncomingFrame(rawFrame) {
+  const packet = parseGpsFrame(rawFrame);
+  if (!packet) {
+    console.warn('[SERIAL] Ignoring malformed frame:', rawFrame);
+    return;
+  }
+
+  emitLocationData({
+    ...packet,
+    timestamp: new Date().toISOString()
+  });
+}
+
+function attachSerialHandlers(port) {
+  let serialBuffer = '';
+
+  port.on('data', (chunk) => {
+    serialBuffer += chunk.toString('utf8');
+    const lines = serialBuffer.split(/\r?\n/);
+    serialBuffer = lines.pop() || '';
+
+    lines.filter(Boolean).forEach((line) => {
+      handleIncomingFrame(line);
     });
   });
-});
 
-mqttClient.on('message', (topic, message) => {
-  const rawPayload = message.toString().trim();
+  port.on('error', (error) => {
+    console.error('Serial port error:', error.message);
+    setSerialStatus('error', error.message);
+  });
 
-  console.log(`[MQTT IN] Topic: ${topic} | Payload: ${rawPayload}`);
+  port.on('close', () => {
+    if (serialPort && serialPort.path === port.path) {
+      serialPort = null;
+      serialPortPath = null;
+      setSerialStatus('disconnected');
+    }
+  });
+}
 
-  if (topic !== MQTT_TOPICS.location) return;
+function connectToPort(portPathToUse) {
+  return new Promise((resolve, reject) => {
+    if (serialPort && serialPort.isOpen) {
+      if (serialPort.path === portPathToUse) {
+        resolve({ port: serialPortPath });
+        return;
+      }
+      serialPort.close(() => {
+        serialPort = null;
+        serialPortPath = null;
+      });
+    }
 
-  // gps_tracker.ino publishes unified JSON:
-  // {"latitude":...,"longitude":...,"altitude":...,"speed":...}
-  let obj;
-  try {
-    obj = JSON.parse(rawPayload);
-  } catch (e) {
-    console.warn('[WARNING] Failed to parse JSON from MQTT payload:', e.message);
-    return;
-  }
+    setSerialStatus('connecting');
 
-  const lat = parseNumber(obj.latitude);
-  const lon = parseNumber(obj.longitude);
-  const alt = parseNumber(obj.altitude);
-  const speed = parseNumber(obj.speed);
+    const port = new SerialPort({
+      path: portPathToUse,
+      baudRate: BAUD_RATE,
+      autoOpen: false
+    });
 
-  if (![lat, lon, alt, speed].every((v) => v !== null)) {
-    console.warn('[WARNING] Missing/invalid fields in MQTT JSON payload:', obj);
-    return;
-  }
+    port.open((error) => {
+      if (error) {
+        const friendly = formatSerialError(error, portPathToUse);
+        setSerialStatus('error', friendly.accessibleMessage);
+        reject(new Error(friendly.accessibleMessage));
+        return;
+      }
 
-  emitLocationData({ latitude: lat, longitude: lon, altitude: alt, speed: speed });
-});
+      attachSerialHandlers(port);
+      serialPort = port;
+      serialPortPath = portPathToUse;
+      setSerialStatus('connected');
+      resolve({ port: portPathToUse });
+    });
+  });
+}
 
+function disconnectSerialPort() {
+  return new Promise((resolve) => {
+    if (!serialPort || !serialPort.isOpen) {
+      serialPort = null;
+      serialPortPath = null;
+      setSerialStatus('disconnected');
+      resolve();
+      return;
+    }
 
-mqttClient.on('error', (err) => {
-  console.error('MQTT Client Error:', err.message);
-});
-
-// ================== API ENDPOINTS FOR MAP OVERLAY ==================
+    serialPort.close((error) => {
+      if (error) {
+        console.warn('Serial close error:', error.message);
+      }
+      serialPort = null;
+      serialPortPath = null;
+      setSerialStatus('disconnected');
+      resolve();
+    });
+  });
+}
 
 app.get('/api/location', (req, res) => {
   if (!currentLocation) return res.status(404).json({ error: 'No location data available yet' });
@@ -130,9 +192,9 @@ app.get('/api/history', (req, res) => {
 app.get('/api/stats', (req, res) => {
   if (coordinateHistory.length === 0) return res.status(404).json({ error: 'No location data available' });
 
-  const lats = coordinateHistory.map(c => c.latitude);
-  const lons = coordinateHistory.map(c => c.longitude);
-  const alts = coordinateHistory.map(c => c.altitude);
+  const lats = coordinateHistory.map((c) => c.latitude);
+  const lons = coordinateHistory.map((c) => c.longitude);
+  const alts = coordinateHistory.map((c) => c.altitude);
 
   res.json({
     total_points: coordinateHistory.length,
@@ -151,14 +213,43 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
-// ================== CSV UPLOAD ==================
+app.get('/api/serial/ports', async (req, res) => {
+  const ports = await refreshAvailablePorts();
+  res.json({
+    ports,
+    selectedPort: serialPortPath,
+    status: serialPortStatus,
+    error: serialPortError
+  });
+});
+
+app.post('/api/serial/connect', async (req, res) => {
+  const portPath = req.body.port;
+  if (!portPath) {
+    return res.status(400).json({ error: 'Missing serial port path' });
+  }
+
+  try {
+    await connectToPort(portPath);
+    return res.json({ ok: true, port: portPath, status: serialPortStatus });
+  } catch (error) {
+    const friendly = formatSerialError(error, portPath);
+    return res.status(500).json({ error: friendly.accessibleMessage, hint: friendly.hint, detail: friendly.detail });
+  }
+});
+
+app.post('/api/serial/disconnect', async (req, res) => {
+  try {
+    await disconnectSerialPort();
+    return res.json({ ok: true, status: serialPortStatus });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 function parseCSVLine(line) {
-  // Minimal CSV parser for our expected format:
-  // Latitude,Longitude,Altitude,Speed,Timestamp
-  // Timestamp may be wrapped in double-quotes.
   const out = [];
   let cur = '';
   let inQuotes = false;
@@ -185,10 +276,10 @@ app.post('/api/upload-csv', upload.single('csv'), (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'Missing csv file upload (field name: csv)' });
 
     const text = req.file.buffer.toString('utf8');
-    const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
     if (lines.length < 2) return res.status(400).json({ error: 'CSV must contain a header row and at least one data row' });
 
-    const header = parseCSVLine(lines[0]).map(h => h.trim());
+    const header = parseCSVLine(lines[0]).map((h) => h.trim());
     const expected = ['Latitude', 'Longitude', 'Altitude', 'Speed', 'Timestamp'];
     const headerOk = expected.every((h, idx) => header[idx] === h);
     if (!headerOk) {
@@ -210,7 +301,7 @@ app.post('/api/upload-csv', upload.single('csv'), (req, res) => {
       const alt = parseNumber(Altitude);
       const speed = parseNumber(Speed);
 
-      if ([lat, lon, alt, speed].some(v => v === null)) {
+      if ([lat, lon, alt, speed].some((value) => value === null)) {
         continue;
       }
 
@@ -225,30 +316,33 @@ app.post('/api/upload-csv', upload.single('csv'), (req, res) => {
 
     if (rows.length === 0) return res.status(400).json({ error: 'No valid rows found in CSV' });
 
-    // Overwrite existing track with uploaded data
     coordinateHistory = [];
-    rows.slice(-MAX_HISTORY).forEach(p => {
+    rows.slice(-MAX_HISTORY).forEach((p) => {
       coordinateHistory.push(p);
     });
 
     currentLocation = coordinateHistory[coordinateHistory.length - 1];
 
-    // Emit every uploaded point in order so the UI can draw the full polyline.
-    // (UI will also update marker/stats per point.)
     coordinateHistory.forEach((p) => {
       io.emit('location_update', p);
     });
 
     return res.json({ ok: true, points_loaded: coordinateHistory.length });
-  } catch (e) {
-    console.error('upload-csv failed:', e);
+  } catch (error) {
+    console.error('upload-csv failed:', error);
     return res.status(500).json({ error: 'Failed to upload/parse CSV' });
   }
 });
 
-
 io.on('connection', (socket) => {
   console.log('User opened the tracker dashboard.');
+  socket.emit('serial_status', {
+    connected: serialPortStatus === 'connected',
+    status: serialPortStatus,
+    port: serialPortPath,
+    error: serialPortError
+  });
+
   socket.on('disconnect', () => {
     console.log('User closed the tracker dashboard.');
   });

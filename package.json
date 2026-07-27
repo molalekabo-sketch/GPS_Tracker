@@ -1,15 +1,18 @@
 {
   "name": "esp32-4g-tracker-dashboard",
   "version": "1.0.0",
-  "description": "Real-time GPS and Voltage tracker dashboard",
+  "description": "Offline GPS tracker dashboard with local serial ingest",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
   "dependencies": {
+    "@serialport/parser-readline": "^12.0.0",
     "express": "^4.19.2",
-    "mqtt": "^5.5.0",
-    "socket.io": "^4.7.5",
-    "multer": "^1.4.5-lts.1"
+    "leaflet": "^1.9.4",
+    "multer": "^1.4.5-lts.1",
+    "serialport": "^12.0.0",
+    "socket.io": "^4.7.5"
   }
 }

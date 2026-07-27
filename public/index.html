@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Real-Time GPS Tracker</title>
-    
-    <!-- Leaflet Map Library (Open-source, no API key needed) -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+    <!-- Leaflet Map Library (served locally so the app can run without cloud access) -->
+    <link rel="stylesheet" href="/vendor/leaflet/dist/leaflet.css" />
+    <script src="/vendor/leaflet/dist/leaflet.js"></script>
 
     <!-- Socket.IO client (served by server.js) -->
     <script src="/socket.io/socket.io.js"></script>
@@ -24,6 +24,7 @@
             height: 100%;
             width: 100%;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow-x: hidden;
         }
 
         #map {
@@ -43,6 +44,7 @@
                 right: 12px;
                 width: auto;
                 top: auto;
+                max-width: 100%;
             }
 
             #telemetry-panel {
@@ -63,19 +65,53 @@
                 padding: 10px;
                 flex-wrap: wrap;
                 gap: 8px;
+                width: auto;
+                max-width: calc(100% - 24px);
             }
 
             button {
                 padding: 8px 10px;
                 font-size: 11px;
+                white-space: nowrap;
             }
 
             #format-toggle {
                 right: 12px;
                 bottom: 190px;
+                max-width: calc(100% - 24px);
+            }
+
+            #format-toggle label {
+                display: inline-flex;
+                margin: 0 4px;
+                white-space: nowrap;
             }
         }
 
+        /* Handle very short phones (avoid overlay overlap) */
+        @media (max-height: 700px) and (orientation: portrait) {
+            #map {
+                height: 55vh;
+            }
+
+            #telemetry-panel {
+                bottom: 120px;
+                padding: 14px;
+            }
+
+            #stats-panel {
+                bottom: 200px;
+                padding: 12px;
+            }
+
+            #format-toggle {
+                bottom: 175px;
+            }
+
+            #control-panel {
+                padding: 10px;
+            }
+        }
 
         /* Telemetry Overlay Panel */
         #telemetry-panel {
@@ -169,6 +205,7 @@
             z-index: 999;
             display: flex;
             gap: 10px;
+            max-width: calc(100% - 40px);
         }
 
         button {
@@ -243,6 +280,51 @@
             margin-right: 5px;
             cursor: pointer;
         }
+
+        #map, #telemetry-panel, #stats-panel, #control-panel, #format-toggle {
+            touch-action: manipulation;
+        }
+
+        /* Collapse overlay content on small screens */
+        @media (orientation: portrait), (max-width: 520px) {
+            .overlay-collapse-toggle {
+                display: flex;
+            }
+        }
+
+        .overlay-collapse-toggle {
+            display: none;
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.35);
+            background: rgba(0,0,0,0.15);
+            color: #fff;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 1000;
+            user-select: none;
+        }
+
+        #stats-panel .overlay-collapse-toggle,
+        #control-panel .overlay-collapse-toggle {
+            color: #2b2b2b;
+            border: 1px solid rgba(0,0,0,0.12);
+            background: rgba(255,255,255,0.6);
+        }
+
+        .overlay-body {
+            display: block;
+        }
+
+        .panel-collapsed .overlay-body {
+            display: none;
+        }
+
     </style>
 </head>
 <body>
@@ -251,37 +333,52 @@
 
     <!-- Telemetry Data Panel -->
     <div id="telemetry-panel">
-        <h2><span class="status-indicator"></span>Asset Telemetry</h2>
-        <div class="telemetry-row">
-            <span class="telemetry-label">Latitude:</span>
-            <span class="telemetry-value" id="lat-value">--</span>
-
+        <div class="overlay-collapse-toggle" data-target="telemetry-panel" aria-label="Collapse telemetry">
+            ▾
         </div>
-        <div class="telemetry-row">
-            <span class="telemetry-label">Longitude:</span>
-            <span class="telemetry-value" id="lon-value">--</span>
-
-        </div>
-        <div class="telemetry-row">
-            <span class="telemetry-label">Voltage:</span>
-            <span class="telemetry-value" id="volt-value">--</span>
-        </div>
-        <div class="telemetry-row">
-            <span class="telemetry-label">Altitude:</span>
-            <span class="telemetry-value" id="alt-value">--</span>
-        </div>
-        <div class="telemetry-row">
-            <span class="telemetry-label">Speed:</span>
-            <span class="telemetry-value" id="speed-value">--</span>
-        </div>
-        <div class="telemetry-row">
-            <span class="telemetry-label">Last Update:</span>
-            <span class="telemetry-value" id="time-value">--:--:--</span>
+        <div class="overlay-body">
+            <h2><span class="status-indicator"></span>Vehicle Telemetry</h2>
+            <div class="telemetry-row">
+                <span class="telemetry-label">Latitude:</span>
+                <span class="telemetry-value" id="lat-value">--</span>
+            </div>
+            <div class="telemetry-row">
+                <span class="telemetry-label">Longitude:</span>
+                <span class="telemetry-value" id="lon-value">--</span>
+            </div>
+            <div class="telemetry-row">
+                <span class="telemetry-label">Voltage:</span>
+                <span class="telemetry-value" id="volt-value">--</span>
+            </div>
+            <div class="telemetry-row">
+                <span class="telemetry-label">Altitude:</span>
+                <span class="telemetry-value" id="alt-value">--</span>
+            </div>
+            <div class="telemetry-row">
+                <span class="telemetry-label">Speed:</span>
+                <span class="telemetry-value" id="speed-value">--</span>
+            </div>
+            <div class="telemetry-row">
+                <span class="telemetry-label">Backlog:</span>
+                <span class="telemetry-value" id="backlog-value">--</span>
+            </div>
+            <div class="telemetry-row">
+                <span class="telemetry-label">Last Update:</span>
+                <span class="telemetry-value" id="time-value">--:--:--</span>
+            </div>
+            <div class="telemetry-row">
+                <button onclick="toggleDiv('control-panel')">Controls</button>
+                <button onclick="toggleDiv('stats-panel')">Stats</button>
+            </div>
         </div>
     </div>
 
     <!-- Statistics Panel -->
-        <div id="stats-panel">
+    <div id="stats-panel">
+        <div class="overlay-collapse-toggle" data-target="stats-panel" aria-label="Collapse statistics">
+            ▾
+        </div>
+        <div class="overlay-body">
             <h3>📊 Track Statistics</h3>
             <div class="stat-item">
                 <span class="stat-label">Points Tracked:</span>
@@ -308,32 +405,47 @@
                 <span class="stat-value" id="stat-volt-max">--</span>
             </div>
         </div>
-
-<div id="control-panel" style="display: flex; flex-direction: column; gap: 10px; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: fit-content;">
-    
-    <!-- Row 1: Map Operations -->
-    <div style="display: flex; gap: 8px; align-items: center;">
-        <button onclick="centerMap()" title="Center Map" style="padding: 6px 12px; cursor: pointer; flex: 1;">📍 Center Map</button>
-        <button onclick="clearTrack()" title="Clear Track" style="padding: 6px 12px; cursor: pointer; flex: 1;">🗑️ Clear Track</button>
-    </div>
-    
-    <!-- Row 2: File Operations -->
-    <div style="display: flex; gap: 8px; align-items: center;">
-        <button onclick="downloadTrack()" title="Export Data" style="padding: 6px 12px; cursor: pointer; flex: 1; background: #343a40; border: 1px solid #495057; border-radius: 4px; font-size: 13px; color: #ffffff; font-family: sans-serif;">⬇️Export</button>
-        <label title="Upload Data" style="padding: 6px 12px; cursor: pointer; flex: 1; background: #343a40; border: 1px solid #495057; border-radius: 4px; font-size: 13px; color: #ffffff; text-align: center; box-sizing: border-box; font-family: sans-serif; display: inline-block;">
-            ⬆️ Upload <input id="csv-file" type="file" accept=".csv" style="display: none;" onchange="uploadTrackCSV()" />
-        </label>
-    </div>
-    
-    <!-- Row 3: Stopwatch Media Controls -->
-    <div style="display: flex; gap: 8px; align-items: center;">
-        <button onclick="startStopwatch()" title="Start/Play" style="padding: 8px 16px; border: 1px solid #c8e6c9; border-radius: 4px; cursor: pointer; flex: 1; font-weight: bold;">▶️ Start</button>
-        <button onclick="stopStopwatch()" title="Stop Track" style="padding: 8px 16px; border: 1px solid #ffcdd2; border-radius: 4px; cursor: pointer; flex: 1; font-weight: bold;">🔲 Stop</button>
     </div>
 
-</div>
+    <div id="control-panel" style="display: flex; flex-direction: column; gap: 10px; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: fit-content;">
+        <div class="overlay-collapse-toggle" data-target="control-panel" aria-label="Collapse controls">
+            ▾
+        </div>
+        <div class="overlay-body">
+            <!-- Row 1: Map Operations -->
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <button onclick="centerMap()" title="Center Map" style="padding: 6px 12px; cursor: pointer; flex: 1;">📍 Center Map</button>
+                <button onclick="clearTrack()" title="Clear Track" style="padding: 6px 12px; cursor: pointer; flex: 1;">🗑️ Clear Track</button>
+            </div>
 
+            <!-- Row 2: File Operations -->
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <button onclick="downloadTrack()" title="Export Data" style="padding: 6px 12px; cursor: pointer; flex: 1; background: #343a40; border: 1px solid #495057; border-radius: 4px; font-size: 13px; color: #ffffff; font-family: sans-serif;">⬇️Export</button>
+                <label title="Upload Data" style="padding: 6px 12px; cursor: pointer; flex: 1; background: #343a40; border: 1px solid #495057; border-radius: 4px; font-size: 13px; color: #ffffff; text-align: center; box-sizing: border-box; font-family: sans-serif; display: inline-block;">
+                    ⬆️ Upload <input id="csv-file" type="file" accept=".csv" style="display: none;" onchange="uploadTrackCSV()" />
+                </label>
+            </div>
 
+            <!-- Row 3: Stopwatch Media Controls -->
+            <div style="display: flex; gap: 8px; align-items: center;">
+                <button onclick="startStopwatch()" title="Start/Play" style="padding: 8px 16px; border: 1px solid #c8e6c9; border-radius: 4px; cursor: pointer; flex: 1; font-weight: bold;">▶️ Start</button>
+                <button onclick="stopStopwatch()" title="Stop Track" style="padding: 8px 16px; border: 1px solid #ffcdd2; border-radius: 4px; cursor: pointer; flex: 1; font-weight: bold;">🔲 Stop</button>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 6px;">
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <label for="port-select" style="font-size: 12px; color: #495057;">Serial Port</label>
+                    <select id="port-select" style="flex: 1; padding: 6px; border-radius: 4px; border: 1px solid #ced4da;"></select>
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button onclick="refreshSerialPorts()" style="padding: 6px 10px; flex: 1; background: #6c757d;">Refresh</button>
+                    <button onclick="connectSerialPort()" style="padding: 6px 10px; flex: 1; background: #28a745;">Connect</button>
+                    <button onclick="disconnectSerialPort()" style="padding: 6px 10px; flex: 1; background: #dc3545;">Disconnect</button>
+                </div>
+                <div id="serial-status-text" style="font-size: 11px; color: #495057;">Serial: disconnected</div>
+            </div>
+        </div>
+    </div>
 
     <!-- Format Toggle -->
     <div id="format-toggle">
@@ -347,21 +459,14 @@
         let marker;
         let polyline;
         let coordinateHistory = [];
-        let mqttClient;
         let isConnected = false;
         let currentFormat = 'dd'; // Decimal Degrees by default
         let lastGPSData = null;
-
-        // Socket.IO configuration (GPS pipeline is: ESP32 -> MQTT -> server.js -> Socket.IO -> UI)
-        // server.js emits: "location_update" with { latitude, longitude, altitude, speed, timestamp }
-
-        
 
         // Await-first-fix state (avoid any generated/default coordinate data)
         let hasFirstFix = false;
 
         // Coordinate Conversion Functions
-
         function decimalDegreesToDMS(decimal, isLat) {
             const direction = isLat ? (decimal >= 0 ? 'N' : 'S') : (decimal >= 0 ? 'E' : 'W');
             decimal = Math.abs(decimal);
@@ -391,7 +496,7 @@
                         lat: decimalDegreesToDDM(lat, true),
                         lon: decimalDegreesToDDM(lon, false)
                     };
-                default: // 'dd' - Decimal Degrees
+                default:
                     return {
                         lat: lat.toFixed(6),
                         lon: lon.toFixed(6)
@@ -408,7 +513,6 @@
 
         // Socket.IO client: receives complete assembled coordinates from server.js
         function initSocket() {
-            // server.js serves socket.io on the same origin
             const socket = io();
 
             socket.on('connect', () => {
@@ -422,19 +526,123 @@
             });
 
             socket.on('location_update', (data) => {
-                // data shape from server.js: { latitude, longitude, altitude, speed, timestamp }
                 lastGPSData = data;
                 updateDisplay(data);
             });
+
+            socket.on('serial_status', (data) => {
+                updateSerialStatus(data);
+            });
         }
 
+        function updateSerialStatus(data) {
+            const indicator = document.querySelector('.status-indicator');
+            const statusText = document.getElementById('serial-status-text');
+            const connected = Boolean(data && data.connected);
+            isConnected = connected;
+
+            if (indicator) {
+                indicator.classList.toggle('disconnected', !connected);
+            }
+
+            if (statusText) {
+                const portPart = data && data.port ? ` on ${data.port}` : '';
+                const desiredStatus = data && data.status ? data.status : 'disconnected';
+                const errorMessage = data && data.error ? data.error : '';
+                const hintMessage = data && data.hint ? ` ${data.hint}` : '';
+                const message = [
+                    `Serial: ${desiredStatus}${portPart}`,
+                    errorMessage ? `• ${errorMessage}` : '',
+                    hintMessage ? `• ${hintMessage}` : ''
+                ].filter(Boolean).join(' ');
+                statusText.textContent = message;
+            }
+        }
+
+        async function refreshSerialPorts() {
+            try {
+                const response = await fetch('/api/serial/ports');
+                const data = await response.json();
+                const select = document.getElementById('port-select');
+                if (!select) return;
+
+                select.innerHTML = '';
+                const ports = data.ports || [];
+
+                if (!ports.length) {
+                    const option = document.createElement('option');
+                    option.value = '';
+                    option.textContent = 'No ports detected';
+                    select.appendChild(option);
+                    updateSerialStatus(data);
+                    return;
+                }
+
+                ports.forEach((port) => {
+                    const option = document.createElement('option');
+                    option.value = port;
+                    option.textContent = port;
+                    if (port === data.selectedPort) {
+                        option.selected = true;
+                    }
+                    select.appendChild(option);
+                });
+
+                if (!select.value) {
+                    select.value = ports[0];
+                }
+
+                updateSerialStatus(data);
+            } catch (error) {
+                console.error('Unable to refresh serial ports:', error);
+            }
+        }
+
+        async function connectSerialPort(selectedPort = null) {
+            const select = document.getElementById('port-select');
+            const port = selectedPort || (select ? select.value : null);
+            if (!port) {
+                alert('No serial port is available. Connect the ESP32 USB cable first.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/serial/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ port })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    updateSerialStatus({ connected: false, status: 'error', port, error: data && data.error ? data.error : 'Unable to connect to the serial port', hint: data && data.hint ? data.hint : null });
+                    alert(data && data.error ? data.error : 'Unable to connect to the serial port');
+                    return;
+                }
+                updateSerialStatus({ connected: true, status: 'connected', port, error: null });
+            } catch (error) {
+                console.error('Serial connect failed:', error);
+                alert('Unable to connect to the selected serial port');
+            }
+        }
+
+        async function disconnectSerialPort() {
+            try {
+                const response = await fetch('/api/serial/disconnect', { method: 'POST' });
+                const data = await response.json();
+                if (!response.ok) {
+                    alert(data && data.error ? data.error : 'Unable to disconnect from the serial port');
+                    return;
+                }
+                updateSerialStatus({ connected: false, status: 'disconnected', port: null, error: null });
+            } catch (error) {
+                console.error('Serial disconnect failed:', error);
+                alert('Unable to disconnect from the serial port');
+            }
+        }
 
         function updateDisplay(data) {
-            // ESP32 publishes: {"latitude":...,"longitude":...,"altitude":...,"speed":...}
-            // (No generated/mock data should be used; only accept valid incoming values.)
             const lat = data.latitude;
             const lon = data.longitude;
-
             if (lat === undefined || lon === undefined) return;
             if (lat === null || lon === null) return;
 
@@ -446,7 +654,6 @@
             const timestamp = new Date();
             const formattedCoords = formatCoordinates(latNum, lonNum, currentFormat);
 
-            // Update marker position and show it on first fix
             marker.setLatLng(pos);
             marker.setStyle({ opacity: 1, fillOpacity: 0.8 });
             marker.setPopupContent(`
@@ -458,7 +665,6 @@
                 Time: ${timestamp.toLocaleTimeString()}
             `);
 
-            // Add to history and polyline
             coordinateHistory.push({
                 lat: latNum,
                 lon: lonNum,
@@ -468,39 +674,30 @@
             });
 
             polyline.addLatLng(pos);
-
-            // Auto-pan to stay centered on asset
             map.panTo(pos);
 
-            // Adjust zoom on first location
             if (!hasFirstFix) {
                 hasFirstFix = true;
                 map.setZoom(16);
             }
 
-            // Update telemetry display with formatted coordinates
             document.getElementById('lat-value').textContent = formattedCoords.lat;
             document.getElementById('lon-value').textContent = formattedCoords.lon;
 
-            // Keep existing Voltage label, but map it to altitude (legacy UI behavior)
             const altNum = data.altitude !== undefined && data.altitude !== null ? parseFloat(data.altitude) : NaN;
             const speedNum = data.speed !== undefined && data.speed !== null ? parseFloat(data.speed) : NaN;
 
             document.getElementById('volt-value').textContent = Number.isFinite(altNum) ? '--' : 'N/A';
             document.getElementById('alt-value').textContent = Number.isFinite(altNum) ? `${altNum.toFixed(2)} m` : 'N/A';
             document.getElementById('speed-value').textContent = Number.isFinite(speedNum) ? `${speedNum.toFixed(2)} m/s` : 'N/A';
+            document.getElementById('backlog-value').textContent = data.isBacklog ? 'Yes' : 'No';
 
             document.getElementById('time-value').textContent = timestamp.toLocaleTimeString();
 
-
-            // Update statistics
             updateStats();
         }
 
-
-        // Initialize map on page load
         function initMap() {
-            // Avoid any generated/default coordinate data. Only render after the first real MQTT message.
             const initialCenter = [0, 0];
 
             map = L.map('map', {
@@ -514,7 +711,6 @@
                 ]
             });
 
-            // Marker starts hidden until first fix
             marker = L.circleMarker(initialCenter, {
                 radius: 8,
                 fillColor: '#667eea',
@@ -524,7 +720,6 @@
                 fillOpacity: 0
             }).addTo(map).bindPopup('Waiting for first GPS fix...');
 
-            // Initialize empty polyline for path trail
             polyline = L.polyline([], {
                 color: '#667eea',
                 weight: 3,
@@ -532,13 +727,8 @@
                 smoothFactor: 1
             }).addTo(map);
 
-            console.log('Map initialized (awaiting first GPS fix)');
-
-            // Initialize Socket.IO connection
             initSocket();
-
         }
-
 
         // Stopwatch state
         let isTiming = false;
@@ -546,12 +736,11 @@
         let timingEndMs = null;
 
         function getSegmentPoints() {
-            // If never started: full history.
             if (!isTiming && timingEndMs === null) return coordinateHistory;
             if (!coordinateHistory.length) return [];
 
             const startMs = timingStartMs;
-            const endMs = timingEndMs; // null while running
+            const endMs = timingEndMs;
             if (!Number.isFinite(startMs)) return [];
 
             const endBound = (endMs === null) ? Infinity : endMs;
@@ -562,7 +751,6 @@
             });
         }
 
-        // Control Functions
         function clearTrack() {
             coordinateHistory = [];
             polyline.setLatLngs([]);
@@ -574,17 +762,15 @@
             const segment = getSegmentPoints();
             if (!segment || segment.length === 0) return;
 
-            // Ensure we have valid numeric points before computing distance/time
             for (const c of segment) {
                 if (!Number.isFinite(Number(c.lat)) || !Number.isFinite(Number(c.lon))) return;
             }
 
-            // Calculate approximate distance (simple Euclidean)
             let totalDistanceKm = 0;
             for (let i = 1; i < segment.length; i++) {
                 const prev = segment[i - 1];
                 const curr = segment[i];
-                const latDiff = (curr.lat - prev.lat) * 111; // 1° lat ≈ 111 km
+                const latDiff = (curr.lat - prev.lat) * 111;
                 const lonDiff = (curr.lon - prev.lon) * 111 * Math.cos(curr.lat * Math.PI / 180);
                 totalDistanceKm += Math.sqrt(latDiff * latDiff + lonDiff * lonDiff);
             }
@@ -594,8 +780,6 @@
             const firstMs = firstTs ? Date.parse(firstTs) : NaN;
             const lastMs = lastTs ? Date.parse(lastTs) : NaN;
 
-            // elapsedSec is derived strictly from the timestamps in the segment
-            // (handles irregular sampling intervals)
             let elapsedSec = 0;
             if (Number.isFinite(firstMs) && Number.isFinite(lastMs) && lastMs >= firstMs) {
                 elapsedSec = (lastMs - firstMs) / 1000;
@@ -605,8 +789,6 @@
                 ? ((totalDistanceKm * 1000) / elapsedSec)
                 : null;
 
-
-            // Stats UI
             const pointsEl = document.getElementById('stat-points');
             if (pointsEl) pointsEl.textContent = segment.length;
 
@@ -627,7 +809,6 @@
                 }
             }
 
-
             const avgEl = document.getElementById('stat-avg-speed');
             if (avgEl) {
                 if (avgSpeedMps === null) {
@@ -638,8 +819,6 @@
                 }
             }
 
-
-            // Keep legacy voltage placeholders
             const voltMinEl = document.getElementById('stat-volt-min');
             if (voltMinEl) voltMinEl.textContent = '--';
             const voltMaxEl = document.getElementById('stat-volt-max');
@@ -648,7 +827,6 @@
 
         function startStopwatch() {
             if (coordinateHistory.length === 0) return;
-            // Use current point's timestamp as start.
             const latest = coordinateHistory[coordinateHistory.length - 1];
             const t = latest.timestamp ? Date.parse(latest.timestamp) : NaN;
             if (!Number.isFinite(t)) {
@@ -669,18 +847,6 @@
             isTiming = false;
         }
 
-        // Prevent duplicate clearTrack definition by removing below old control section.
-
-
-
-        // Control Functions
-        function clearTrack() {
-            coordinateHistory = [];
-            polyline.setLatLngs([]);
-            document.getElementById('stat-points').textContent = '0';
-            console.log('Track cleared');
-        }
-
         function centerMap() {
             if (coordinateHistory.length > 0) {
                 const latest = coordinateHistory[coordinateHistory.length - 1];
@@ -693,10 +859,10 @@
                 alert('No track data to download');
                 return;
             }
-            
+
             const csv = 'Latitude,Longitude,Altitude,Speed,Timestamp\n' +
                 coordinateHistory.map(c => `${c.lat},${c.lon},${c.altitude},${c.speed},"${c.timestamp}"`).join('\n');
-            
+
             const blob = new Blob([csv], { type: 'text/csv' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -733,7 +899,6 @@
                     return;
                 }
 
-                // server overwrites history and emits last point
                 clearTrack();
                 alert(`Upload successful: loaded ${data.points_loaded} points`);
             } catch (e) {
@@ -742,8 +907,69 @@
             }
         }
 
-        // Initialize on page load
-        window.addEventListener('load', initMap);
+        function toggleDiv(targetId) {
+            const panel = document.getElementById(targetId);
+            if (!panel) return;
+
+            const shouldExpand = panel.classList.contains('panel-collapsed');
+            panel.classList.toggle('panel-collapsed', !shouldExpand);
+
+            const t = document.querySelector(`.overlay-collapse-toggle[data-target="${targetId}"]`);
+            if (t) t.textContent = shouldExpand ? '▾' : '▸';
+
+            // Update toggle visibility on layout reflow
+            try {
+                panel.style.display = '';
+            } catch (e) {}
+        }
+
+        function setupOverlayCollapse() {
+
+            const toggleEls = document.querySelectorAll('.overlay-collapse-toggle');
+            toggleEls.forEach((el) => {
+                el.addEventListener('click', () => {
+                    const targetId = el.getAttribute('data-target');
+                    const panel = document.getElementById(targetId);
+                    if (!panel) return;
+
+                    const collapsed = !panel.classList.contains('panel-collapsed');
+                    panel.classList.toggle('panel-collapsed', collapsed);
+                    el.textContent = collapsed ? '▸' : '▾';
+                });
+            });
+
+            // Auto-collapse on initial small screens
+            const isSmall = window.matchMedia('(orientation: portrait), (max-width: 520px)').matches;
+            if (isSmall) {
+                ['telemetry-panel', 'stats-panel', 'control-panel'].forEach((id) => {
+                    const panel = document.getElementById(id);
+                    const t = document.querySelector(`.overlay-collapse-toggle[data-target="${id}"]`);
+                    if (!panel || !t) return;
+                    panel.classList.add('panel-collapsed');
+                    t.textContent = '▸';
+                });
+            }
+
+            // Auto-collapse/expand when screen size changes
+            const mq = window.matchMedia('(orientation: portrait), (max-width: 520px)');
+            mq.addEventListener('change', (e) => {
+                const shouldCollapse = e.matches;
+                ['telemetry-panel', 'stats-panel', 'control-panel'].forEach((id) => {
+                    const panel = document.getElementById(id);
+                    const t = document.querySelector(`.overlay-collapse-toggle[data-target="${id}"]`);
+                    if (!panel || !t) return;
+                    panel.classList.toggle('panel-collapsed', shouldCollapse);
+                    t.textContent = shouldCollapse ? '▸' : '▾';
+                });
+            });
+        }
+
+        window.addEventListener('load', async () => {
+            setupOverlayCollapse();
+            initMap();
+            await refreshSerialPorts();
+        });
     </script>
 </body>
 </html>
+
