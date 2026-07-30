@@ -24,6 +24,7 @@ HardwareSerial modem(2);    // Use Serial2 for hardware connection
 
 unsigned long currentTime;
 unsigned long lastPublishTime = 0;
+uint32_t currentSequence = 0;
 
 // Flag and status updated by the ESP-NOW callback
 volatile bool callbackReceived = false;
@@ -32,15 +33,25 @@ volatile bool lastDeliverySuccess = false;
 String currentLogFilename = "";
 bool sdMounted = false;
 
-// Updated payload structure (includes isBacklog flag so receiver knows history vs live)
+#define MSG_GPS 0
+#define MSG_REQUEST_BACKLOG 1
+#define MSG_BACKLOG_EMPTY 2
+
+// Updated payload structure (includes msgType, isBacklog and sequence number)
 struct GPSData {
+  uint8_t msgType;
+  uint8_t isBacklog;
+  uint8_t reserved[2];
+  uint32_t sequence;
   float latitude;
   float longitude;
   float altitude;
   float speed;
   bool isValid;
-  bool isBacklog; 
 };
+
+void OnDataRecv(const uint8_t * mac_addr, const uint8_t *incomingData, int len);
+void sendBacklogEmptyAck(const uint8_t * mac_addr);
 
 /**
  * Send AT command to modem and wait for response
@@ -179,7 +190,7 @@ void createBootLogFile()
   }
 
   if (file.size() == 0) {
-    file.println("timestamp,latitude,longitude,altitude,speed,isBacklog");
+    file.println("timestamp,sequence,latitude,longitude,altitude,speed,isBacklog");
   }
   file.close();
   Serial.printf("Created boot log file: %s\n", currentLogFilename.c_str());
@@ -196,7 +207,8 @@ void appendLogRecord(const GPSData &data, const String &recordTimestamp)
   }
 
   String ts = normalizeTimestampForCsv(recordTimestamp);
-  file.printf("%s,%.6f,%.6f,%.2f,%.2f,%d\n", ts.c_str(),
+  file.printf("%s,%u,%.6f,%.6f,%.2f,%.2f,%u\n", ts.c_str(),
+              data.sequence,
               data.latitude, data.longitude, data.altitude, data.speed,
               data.isBacklog ? 1 : 0);
   file.close();
@@ -207,7 +219,16 @@ void appendLogRecord(const GPSData &data, const String &recordTimestamp)
  */
 struct GPSData parseGPSResponse(String response)
 {
-  GPSData data = {0, 0, 0, 0, false, false};
+  GPSData data;
+  data.msgType = MSG_GPS;
+  data.isBacklog = 0;
+  data.reserved[0] = data.reserved[1] = 0;
+  data.sequence = 0;
+  data.latitude = 0;
+  data.longitude = 0;
+  data.altitude = 0;
+  data.speed = 0;
+  data.isValid = false;
   
   int startIndex = response.indexOf("+CGNSSINFO:");
   if (startIndex == -1) {
@@ -273,7 +294,42 @@ void OnDataSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
   Serial.println(lastDeliverySuccess ? "Delivery Success" : "Delivery Fail");
 }
 
+void OnDataRecv(const uint8_t * mac_addr, const uint8_t *incomingData, int len) {
+  if (len < 1) return;
 
+  uint8_t msgType = incomingData[0];
+  if (msgType == MSG_REQUEST_BACKLOG) {
+    Serial.println("Received backlog request from receiver.");
+    if (SD.exists("/unsent.csv")) {
+      File check = SD.open("/unsent.csv", FILE_READ);
+      if (check && check.size() > 0) {
+        check.close();
+        flushBacklog();
+      } else {
+        if (check) check.close();
+        sendBacklogEmptyAck(mac_addr);
+      }
+    } else {
+      sendBacklogEmptyAck(mac_addr);
+    }
+  }
+}
+
+void sendBacklogEmptyAck(const uint8_t * mac_addr) {
+  GPSData ack = {};
+  ack.msgType = MSG_BACKLOG_EMPTY;
+  ack.isBacklog = 0;
+  ack.reserved[0] = ack.reserved[1] = 0;
+  ack.sequence = 0;
+  ack.latitude = 0;
+  ack.longitude = 0;
+  ack.altitude = 0;
+  ack.speed = 0;
+  ack.isValid = true;
+
+  esp_err_t result = esp_now_send(mac_addr, (uint8_t *)&ack, sizeof(ack));
+  Serial.printf("Sent backlog-empty response (%d)\n", result);
+}
 
 /**
  * Append unsent GPS frame to SD card CSV
@@ -282,7 +338,7 @@ void saveToSD(GPSData data, const String &recordTimestamp) {
   File file = SD.open("/unsent.csv", FILE_APPEND);
   if (file) {
     String ts = normalizeTimestampForCsv(recordTimestamp);
-    file.printf("%s,%.6f,%.6f,%.2f,%.2f\n", ts.c_str(), data.latitude, data.longitude, data.altitude, data.speed);
+    file.printf("%s,%u,%.6f,%.6f,%.2f,%.2f\n", ts.c_str(), data.sequence, data.latitude, data.longitude, data.altitude, data.speed);
     file.close(); // Force write to physical storage
     Serial.println("-> Saved point to SD card backlog.");
   } else {
@@ -313,13 +369,39 @@ void flushBacklog() {
 
     // Parse CSV line into payload struct (timestamp is preserved but not sent)
     GPSData backlogData;
-    char timestampBuf[48] = {0};
-    sscanf(line.c_str(), "%47[^,],%f,%f,%f,%f", timestampBuf,
-           &backlogData.latitude, &backlogData.longitude,
-           &backlogData.altitude, &backlogData.speed);
-
+    backlogData.msgType = MSG_GPS;
+    backlogData.isBacklog = 1;
+    backlogData.reserved[0] = backlogData.reserved[1] = 0;
     backlogData.isValid = true;
-    backlogData.isBacklog = true;
+
+    String parts[6];
+    int partIndex = 0;
+    int start = 0;
+    while (partIndex < 6) {
+      int comma = line.indexOf(',', start);
+      if (comma == -1) {
+        parts[partIndex++] = line.substring(start);
+        break;
+      }
+      parts[partIndex++] = line.substring(start, comma);
+      start = comma + 1;
+    }
+
+    if (partIndex >= 6) {
+      backlogData.sequence = parts[1].toInt();
+      backlogData.latitude = parts[2].toFloat();
+      backlogData.longitude = parts[3].toFloat();
+      backlogData.altitude = parts[4].toFloat();
+      backlogData.speed = parts[5].toFloat();
+    } else if (partIndex >= 4) {
+      backlogData.sequence = currentSequence++;
+      backlogData.latitude = parts[0].toFloat();
+      backlogData.longitude = parts[1].toFloat();
+      backlogData.altitude = parts[2].toFloat();
+      backlogData.speed = parts[3].toFloat();
+    } else {
+      continue;
+    }
 
     // Attempt transmission
     callbackReceived = false;
@@ -334,9 +416,7 @@ void flushBacklog() {
     // If packet delivery failed, hold unsent points in temp file and abort flush loop
     if (result != ESP_OK || !lastDeliverySuccess) {
       Serial.println("-> Link lost during backlog flush. Preserving remaining records.");
-      tempFile.printf("%.6f,%.6f,%.2f,%.2f\n", 
-                      backlogData.latitude, backlogData.longitude, 
-                      backlogData.altitude, backlogData.speed);
+      tempFile.println(line);
 
       while (file.available()) {
         tempFile.println(file.readStringUntil('\n'));
@@ -373,6 +453,11 @@ void publishGPSData(GPSData gpsData, const String &recordTimestamp)
     Serial.println("Cannot transmit invalid GPS data");
     return;
   }
+
+  gpsData.msgType = MSG_GPS;
+  gpsData.isBacklog = 0;
+  gpsData.reserved[0] = gpsData.reserved[1] = 0;
+  gpsData.sequence = currentSequence++;
 
   appendLogRecord(gpsData, recordTimestamp);
 
@@ -453,8 +538,9 @@ void setup()
     return;
   }
 
-    // Add this block inside setup() right after your esp_now_init() verification check:
   esp_now_register_send_cb(OnDataSent);
+  esp_now_register_recv_cb(OnDataRecv);
+
   memcpy(peerInfo.peer_addr, receiverAddress, 6);
   peerInfo.channel = 0;  
   peerInfo.encrypt = false;      
