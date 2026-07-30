@@ -29,6 +29,9 @@ unsigned long lastPublishTime = 0;
 volatile bool callbackReceived = false;
 volatile bool lastDeliverySuccess = false;
 
+String currentLogFilename = "";
+bool sdMounted = false;
+
 // Updated payload structure (includes isBacklog flag so receiver knows history vs live)
 struct GPSData {
   float latitude;
@@ -63,6 +66,140 @@ String sendATCommand(String command, const int timeout, boolean debug)
   }
 
   return response;
+}
+
+String normalizeTimestampForFilename(const String &raw)
+{
+  String normalized = "";
+  for (unsigned int i = 0; i < raw.length(); ++i)
+  {
+    char c = raw[i];
+    if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '-') {
+      normalized += c;
+    } else if (c == ' ' || c == ':' || c == '/' || c == '.' || c == ',') {
+      normalized += '_';
+    }
+  }
+  if (normalized.length() == 0) {
+    normalized = "boot_" + String(millis());
+  }
+  return normalized;
+}
+
+String makeBootLogFileName(const String &timeHint)
+{
+  String safeName = timeHint;
+  if (safeName.length() == 0) {
+    safeName = "boot_" + String(millis());
+  }
+  safeName = normalizeTimestampForFilename(safeName);
+  if (!safeName.startsWith("track_")) {
+    safeName = "track_" + safeName;
+  }
+  return "/" + safeName + ".csv";
+}
+
+String parseTimestampFromCclk(const String &response)
+{
+  int index = response.indexOf("+CCLK:");
+  if (index == -1) return "";
+  int firstQuote = response.indexOf('"', index);
+  int secondQuote = response.indexOf('"', firstQuote + 1);
+  if (firstQuote == -1 || secondQuote == -1) return "";
+  String raw = response.substring(firstQuote + 1, secondQuote);
+  raw.trim();
+  return raw;
+}
+
+String parseTimestampFromCgnssInfo(const String &response)
+{
+  int startIndex = response.indexOf("+CGNSSINFO:");
+  if (startIndex == -1) return "";
+  String dataStr = response.substring(startIndex + 11);
+  dataStr.trim();
+
+  int prev = 0;
+  while (prev < dataStr.length()) {
+    int next = dataStr.indexOf(',', prev);
+    String token = (next == -1) ? dataStr.substring(prev) : dataStr.substring(prev, next);
+    token.trim();
+
+    if (token.length() >= 10) {
+      bool hasDigit = false;
+      for (unsigned int i = 0; i < token.length(); ++i) {
+        if (isDigit(token[i])) {
+          hasDigit = true;
+          break;
+        }
+      }
+      if (hasDigit) {
+        return token;
+      }
+    }
+
+    if (next == -1) break;
+    prev = next + 1;
+  }
+
+  return "";
+}
+
+String getBootTimestampHint()
+{
+  String response = sendATCommand("AT+CCLK?", 1000, DEBUG);
+  String timestamp = parseTimestampFromCclk(response);
+  if (timestamp.length()) {
+    return timestamp;
+  }
+
+  response = sendATCommand("AT+CGNSSINFO", 2000, DEBUG);
+  return parseTimestampFromCgnssInfo(response);
+}
+
+String normalizeTimestampForCsv(String raw)
+{
+  String out = raw;
+  out.replace(",", " ");
+  out.replace("\"", "");
+  out.replace(";", " ");
+  return out;
+}
+
+void createBootLogFile()
+{
+  if (!sdMounted) return;
+
+  String bootHint = getBootTimestampHint();
+  currentLogFilename = makeBootLogFileName(bootHint);
+
+  File file = SD.open(currentLogFilename, FILE_APPEND);
+  if (!file) {
+    Serial.printf("Failed to create log file '%s'\n", currentLogFilename.c_str());
+    return;
+  }
+
+  if (file.size() == 0) {
+    file.println("timestamp,latitude,longitude,altitude,speed,isBacklog");
+  }
+  file.close();
+  Serial.printf("Created boot log file: %s\n", currentLogFilename.c_str());
+}
+
+void appendLogRecord(const GPSData &data, const String &recordTimestamp)
+{
+  if (!sdMounted || currentLogFilename.length() == 0) return;
+
+  File file = SD.open(currentLogFilename, FILE_APPEND);
+  if (!file) {
+    Serial.printf("Unable to append to log file '%s'\n", currentLogFilename.c_str());
+    return;
+  }
+
+  String ts = normalizeTimestampForCsv(recordTimestamp);
+  file.printf("%s,%.6f,%.6f,%.2f,%.2f,%d\n", ts.c_str(),
+              data.latitude, data.longitude, data.altitude, data.speed,
+              data.isBacklog ? 1 : 0);
+  file.close();
 }
 
 /**
@@ -141,10 +278,11 @@ void OnDataSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
 /**
  * Append unsent GPS frame to SD card CSV
  */
-void saveToSD(GPSData data) {
+void saveToSD(GPSData data, const String &recordTimestamp) {
   File file = SD.open("/unsent.csv", FILE_APPEND);
   if (file) {
-    file.printf("%.6f,%.6f,%.2f,%.2f\n", data.latitude, data.longitude, data.altitude, data.speed);
+    String ts = normalizeTimestampForCsv(recordTimestamp);
+    file.printf("%s,%.6f,%.6f,%.2f,%.2f\n", ts.c_str(), data.latitude, data.longitude, data.altitude, data.speed);
     file.close(); // Force write to physical storage
     Serial.println("-> Saved point to SD card backlog.");
   } else {
@@ -173,12 +311,13 @@ void flushBacklog() {
     line.trim();
     if (line.length() == 0) continue;
 
-    // Parse CSV line into payload struct
+    // Parse CSV line into payload struct (timestamp is preserved but not sent)
     GPSData backlogData;
-    sscanf(line.c_str(), "%f,%f,%f,%f", 
-           &backlogData.latitude, &backlogData.longitude, 
+    char timestampBuf[48] = {0};
+    sscanf(line.c_str(), "%47[^,],%f,%f,%f,%f", timestampBuf,
+           &backlogData.latitude, &backlogData.longitude,
            &backlogData.altitude, &backlogData.speed);
-    
+
     backlogData.isValid = true;
     backlogData.isBacklog = true;
 
@@ -228,12 +367,14 @@ void flushBacklog() {
 /**
  * Transmit raw GPS metrics over ESP-NOW & handle SD fallback
  */
-void publishGPSData(GPSData gpsData)
+void publishGPSData(GPSData gpsData, const String &recordTimestamp)
 {
   if (!gpsData.isValid) {
     Serial.println("Cannot transmit invalid GPS data");
     return;
   }
+
+  appendLogRecord(gpsData, recordTimestamp);
 
   Serial.println("\n--- Broadcasting GPS structural payload over ESP-NOW ---");
 
@@ -253,11 +394,11 @@ void publishGPSData(GPSData gpsData)
       flushBacklog();
     } else {
       Serial.println("Delivery failed at receiver end. Backing up to SD...");
-      saveToSD(gpsData);
+      saveToSD(gpsData, recordTimestamp);
     }
   } else {
     Serial.println("Error triggering ESP-NOW stack. Backing up to SD...");
-    saveToSD(gpsData);
+    saveToSD(gpsData, recordTimestamp);
   }
 }
 
@@ -296,10 +437,12 @@ void setup()
 
   // Initialize SD Card
   Serial.println("Initializing SD Card...");
-  if (!SD.begin(SD_CS_PIN)) {
+  sdMounted = SD.begin(SD_CS_PIN);
+  if (!sdMounted) {
     Serial.println("SD Card initialization failed! Check CS pin assignment.");
   } else {
     Serial.println("SD Card mounted successfully.");
+    createBootLogFile();
   }
 
   // ESP-NOW SETUP
@@ -330,8 +473,9 @@ void loop()
     lastPublishTime = currentTime;
     
     String response = sendATCommand("AT+CGNSSINFO", 2000, DEBUG);
+    String dataTimestamp = parseTimestampFromCgnssInfo(response);
     GPSData gpsData = parseGPSResponse(response);
     
-    publishGPSData(gpsData);
+    publishGPSData(gpsData, dataTimestamp);
   }
 }
