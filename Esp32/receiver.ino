@@ -63,10 +63,16 @@ void printMac(const uint8_t *mac)
   }
 }
 
-void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
+void onDataSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status)
 {
   sendComplete = true;
   sendSuccess = (status == ESP_NOW_SEND_SUCCESS);
+
+  if (waitingForReply && !sendSuccess) {
+    waitingForReply = false;
+    requestRetries = 0;
+    Serial.println("Backlog request was not delivered to the sender; will wait for fresh data or a later retry.");
+  }
 }
 
 bool macEqual(const uint8_t *a, const uint8_t *b)
@@ -222,9 +228,11 @@ void handleBacklogGps(const EspNowFrame &frame, const uint8_t *mac_addr)
   Serial.println(frame.speed, 2);
 }
 
-void onDataRecv(const uint8_t * mac_addr, const uint8_t *incomingData, int len)
+void onDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len)
 {
   if (len < 1) return;
+
+  const uint8_t *mac_addr = (info && info->src_addr) ? info->src_addr : nullptr;
 
   EspNowFrame packet;
   memset(&packet, 0, sizeof(packet));
@@ -239,11 +247,10 @@ void onDataRecv(const uint8_t * mac_addr, const uint8_t *incomingData, int len)
   } else if (packet.msgType == MSG_REQUEST_BACKLOG) {
     Serial.println("Received unexpected backlog request on receiver; ignoring.");
   } else if (packet.msgType == MSG_BACKLOG_EMPTY) {
-    Serial.println("Sender responded that no backlog exists for missing entries.");
+    Serial.println("Sender processed the backlog request and reported no backlog for the requested range.");
     if (missingCount > 0) {
-      Serial.println("Assuming sender was offline during predicted missing interval.");
+      Serial.println("Keeping pending missing entries until a later frame or timeout confirms they are lost.");
       printMissingStatus();
-      missingCount = 0;
     }
     waitingForReply = false;
     requestRetries = 0;
@@ -380,8 +387,13 @@ void loop()
       requestBacklog();
     } else {
       waitingForReply = false;
-      Serial.println("No reply to backlog request; assuming sender out of range and waiting for next packet.");
+      Serial.println("No backlog response received before timeout; leaving pending entries unresolved until the next packet arrives.");
     }
+  }
+
+  if (waitingForReply && missingCount > 0 && now > lastRequestMillis + OFFLINE_TIMEOUT_MS) {
+    waitingForReply = false;
+    Serial.println("Backlog request timed out without a response; preserving pending entries for later recovery.");
   }
 
   if (sendComplete) {

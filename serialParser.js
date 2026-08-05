@@ -26,43 +26,142 @@ function parseNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function parseGpsFrame(rawFrame) {
-  const line = String(rawFrame || '').trim();
-  if (!line) return null;
+function parseBooleanValue(value) {
+  if (value === undefined || value === null) return false;
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) return false;
+  if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
+  const parsedInt = Number.parseInt(normalized, 10);
+  return !Number.isNaN(parsedInt) ? parsedInt !== 0 : false;
+}
 
-  const parts = parseCsvLine(line);
-  if (parts.length < 4) return null;
+function parseStandardGpsRow(line) {
+  const parts = parseCsvLine(String(line || '').trim());
+  if (parts.length < 6) return null;
 
-  const [latitudeRaw, longitudeRaw, altitudeRaw, speedRaw, backlogRaw] = parts;
+  const [timestampRaw, latitudeRaw, longitudeRaw, altitudeRaw, speedRaw, backlogRaw, voltageRaw, currentRaw] = parts;
   const latitude = parseNumber(latitudeRaw);
   const longitude = parseNumber(longitudeRaw);
   const altitude = parseNumber(altitudeRaw);
   const speed = parseNumber(speedRaw);
+  const voltage = parseNumber(voltageRaw);
+  const current = parseNumber(currentRaw);
 
   if ([latitude, longitude, altitude, speed].some((value) => value === null)) {
     return null;
   }
 
-  const backlogValue = backlogRaw === undefined ? '' : backlogRaw.trim();
-  let isBacklog = false;
-  if (backlogValue) {
-    const normalized = backlogValue.toLowerCase();
-    if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'y') {
-      isBacklog = true;
-    } else {
-      const parsedInt = parseInt(backlogValue, 10);
-      isBacklog = !Number.isNaN(parsedInt) ? parsedInt !== 0 : false;
-    }
-  }
-
-  return {
+  const payload = {
+    timestamp: timestampRaw || null,
     latitude,
     longitude,
     altitude,
     speed,
-    isBacklog,
+    isBacklog: parseBooleanValue(backlogRaw)
+  };
+
+  if (voltage !== null) {
+    payload.voltage = voltage;
+  }
+
+  if (current !== null) {
+    payload.current = current;
+  }
+
+  return payload;
+}
+
+function parseBacklogCsvRow(line) {
+  const trimmed = String(line || '').trim();
+  if (!trimmed) return null;
+
+  const parts = parseCsvLine(trimmed);
+  if (parts.length < 6) return null;
+
+  const standardRow = parseStandardGpsRow(trimmed);
+  if (standardRow) {
+    return standardRow;
+  }
+
+  const [timestampRaw, sequenceRaw, latitudeRaw, longitudeRaw, altitudeRaw, speedRaw, voltageRaw, currentRaw] = parts;
+  const sequence = Number.parseInt(sequenceRaw, 10);
+  const latitude = parseNumber(latitudeRaw);
+  const longitude = parseNumber(longitudeRaw);
+  const altitude = parseNumber(altitudeRaw);
+  const speed = parseNumber(speedRaw);
+  const voltage = parseNumber(voltageRaw);
+  const current = parseNumber(currentRaw);
+
+  if ([latitude, longitude, altitude, speed].some((value) => value === null) || Number.isNaN(sequence)) {
+    return null;
+  }
+
+  const payload = {
+    timestamp: timestampRaw || '',
+    latitude,
+    longitude,
+    altitude,
+    speed,
+    isBacklog: true
+  };
+
+  if (voltage !== null) {
+    payload.voltage = voltage;
+  }
+
+  if (current !== null) {
+    payload.current = current;
+  }
+
+  return payload;
+}
+
+function parseGpsFrame(rawFrame) {
+  const line = String(rawFrame || '').trim();
+  if (!line) return null;
+
+  const standardRow = parseStandardGpsRow(line);
+  if (standardRow) {
+    return {
+      ...standardRow,
+      timestamp: standardRow.timestamp
+    };
+  }
+
+  const parts = parseCsvLine(line);
+  if (parts.length < 4) return null;
+
+  const [latitudeRaw, longitudeRaw, altitudeRaw, speedRaw, backlogRaw, voltageRaw, currentRaw] = parts;
+  const latitude = parseNumber(latitudeRaw);
+  const longitude = parseNumber(longitudeRaw);
+  const altitude = parseNumber(altitudeRaw);
+  const speed = parseNumber(speedRaw);
+  const voltage = parseNumber(voltageRaw);
+  const current = parseNumber(currentRaw);
+
+  if ([latitude, longitude, altitude, speed].some((value) => value === null)) {
+    return null;
+  }
+
+  const payload = {
+    latitude,
+    longitude,
+    altitude,
+    speed,
+    isBacklog: parseBooleanValue(backlogRaw),
     timestamp: null
   };
+
+  if (voltage !== null) {
+    payload.voltage = voltage;
+  }
+
+  if (current !== null) {
+    payload.current = current;
+  }
+
+  return payload;
 }
 
 function formatSerialError(error, portPath) {
@@ -97,6 +196,7 @@ function formatSerialError(error, portPath) {
 
 module.exports = {
   parseCsvLine,
+  parseBacklogCsvRow,
   parseGpsFrame,
   formatSerialError
 };

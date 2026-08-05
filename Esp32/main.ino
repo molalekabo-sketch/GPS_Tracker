@@ -50,7 +50,7 @@ struct GPSData {
   bool isValid;
 };
 
-void OnDataRecv(const uint8_t * mac_addr, const uint8_t *incomingData, int len);
+void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len);
 void sendBacklogEmptyAck(const uint8_t * mac_addr);
 
 /**
@@ -190,7 +190,7 @@ void createBootLogFile()
   }
 
   if (file.size() == 0) {
-    file.println("timestamp,sequence,latitude,longitude,altitude,speed,isBacklog");
+    file.println("timestamp,latitude,longitude,altitude,speed,isBacklog");
   }
   file.close();
   Serial.printf("Created boot log file: %s\n", currentLogFilename.c_str());
@@ -207,8 +207,7 @@ void appendLogRecord(const GPSData &data, const String &recordTimestamp)
   }
 
   String ts = normalizeTimestampForCsv(recordTimestamp);
-  file.printf("%s,%u,%.6f,%.6f,%.2f,%.2f,%u\n", ts.c_str(),
-              data.sequence,
+  file.printf("%s,%.6f,%.6f,%.2f,%.2f,%u\n", ts.c_str(),
               data.latitude, data.longitude, data.altitude, data.speed,
               data.isBacklog ? 1 : 0);
   file.close();
@@ -294,12 +293,13 @@ void OnDataSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
   Serial.println(lastDeliverySuccess ? "Delivery Success" : "Delivery Fail");
 }
 
-void OnDataRecv(const uint8_t * mac_addr, const uint8_t *incomingData, int len) {
+void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
   if (len < 1) return;
 
   uint8_t msgType = incomingData[0];
   if (msgType == MSG_REQUEST_BACKLOG) {
     Serial.println("Received backlog request from receiver.");
+    const uint8_t *mac_addr = (info && info->src_addr) ? info->src_addr : receiverAddress;
     if (SD.exists("/unsent.csv")) {
       File check = SD.open("/unsent.csv", FILE_READ);
       if (check && check.size() > 0) {
@@ -388,11 +388,20 @@ void flushBacklog() {
     }
 
     if (partIndex >= 6) {
-      backlogData.sequence = parts[1].toInt();
-      backlogData.latitude = parts[2].toFloat();
-      backlogData.longitude = parts[3].toFloat();
-      backlogData.altitude = parts[4].toFloat();
-      backlogData.speed = parts[5].toFloat();
+      backlogData.sequence = currentSequence++;
+      if (parts[1].length() > 0 && parts[1].indexOf('.') == -1 && parts[1].indexOf('-') == -1 && parts[1].indexOf('+') == -1 && parts[1].toInt() >= 0) {
+        backlogData.sequence = parts[1].toInt();
+        backlogData.latitude = parts[2].toFloat();
+        backlogData.longitude = parts[3].toFloat();
+        backlogData.altitude = parts[4].toFloat();
+        backlogData.speed = parts[5].toFloat();
+      } else {
+        backlogData.latitude = parts[1].toFloat();
+        backlogData.longitude = parts[2].toFloat();
+        backlogData.altitude = parts[3].toFloat();
+        backlogData.speed = parts[4].toFloat();
+        backlogData.isBacklog = parts[5].toInt() != 0;
+      }
     } else if (partIndex >= 4) {
       backlogData.sequence = currentSequence++;
       backlogData.latitude = parts[0].toFloat();
@@ -460,6 +469,7 @@ void publishGPSData(GPSData gpsData, const String &recordTimestamp)
   gpsData.sequence = currentSequence++;
 
   appendLogRecord(gpsData, recordTimestamp);
+  saveToSD(gpsData, recordTimestamp);
 
   Serial.println("\n--- Broadcasting GPS structural payload over ESP-NOW ---");
 
@@ -475,8 +485,6 @@ void publishGPSData(GPSData gpsData, const String &recordTimestamp)
 
     if (lastDeliverySuccess) {
       Serial.println("Live frame delivered successfully.");
-      // Connection confirmed active — sync any stored backlog points
-      flushBacklog();
     } else {
       Serial.println("Delivery failed at receiver end. Backing up to SD...");
       saveToSD(gpsData, recordTimestamp);

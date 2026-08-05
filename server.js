@@ -32,6 +32,16 @@ function parseNumber(payload) {
   return Number.isFinite(n) ? n : null;
 }
 
+function parseBooleanValue(payload) {
+  if (payload === undefined || payload === null) return false;
+  const normalized = String(payload).trim().toLowerCase();
+  if (!normalized) return false;
+  if (['true', '1', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'n', 'off'].includes(normalized)) return false;
+  const parsedInt = Number.parseInt(normalized, 10);
+  return !Number.isNaN(parsedInt) ? parsedInt !== 0 : false;
+}
+
 function emitLocationData(data) {
   const timestamp = data.timestamp || new Date().toISOString();
   const payload = {
@@ -42,6 +52,14 @@ function emitLocationData(data) {
     isBacklog: Boolean(data.isBacklog),
     timestamp
   };
+
+  if (data.voltage !== undefined && data.voltage !== null) {
+    payload.voltage = data.voltage;
+  }
+
+  if (data.current !== undefined && data.current !== null) {
+    payload.current = data.current;
+  }
 
   currentLocation = payload;
 
@@ -280,11 +298,23 @@ app.post('/api/upload-csv', upload.single('csv'), (req, res) => {
     if (lines.length < 2) return res.status(400).json({ error: 'CSV must contain a header row and at least one data row' });
 
     const header = parseCSVLine(lines[0]).map((h) => h.trim());
-    const expected = ['Latitude', 'Longitude', 'Altitude', 'Speed', 'Timestamp'];
-    const headerOk = expected.every((h, idx) => header[idx] === h);
+    const expected = ['Timestamp', 'Latitude', 'Longitude', 'Altitude', 'Speed', 'IsBacklog', 'Voltage', 'Current'];
+    const normalizedHeader = header.map((h) => h.toLowerCase());
+    const indexOfHeader = (name) => normalizedHeader.indexOf(name.toLowerCase());
+
+    const timestampIndex = indexOfHeader('Timestamp');
+    const latitudeIndex = indexOfHeader('Latitude');
+    const longitudeIndex = indexOfHeader('Longitude');
+    const altitudeIndex = indexOfHeader('Altitude');
+    const speedIndex = indexOfHeader('Speed');
+    const backlogIndex = indexOfHeader('IsBacklog');
+    const voltageIndex = indexOfHeader('Voltage');
+    const currentIndex = indexOfHeader('Current');
+
+    const headerOk = [timestampIndex, latitudeIndex, longitudeIndex, altitudeIndex, speedIndex].every((index) => index !== -1);
     if (!headerOk) {
       return res.status(400).json({
-        error: 'Invalid CSV header. Expected: ' + expected.join(', '),
+        error: 'Invalid CSV header. Expected columns: ' + expected.join(', '),
         received: header
       });
     }
@@ -294,24 +324,37 @@ app.post('/api/upload-csv', upload.single('csv'), (req, res) => {
       const parts = parseCSVLine(lines[i]);
       if (parts.length < 5) continue;
 
-      const [Latitude, Longitude, Altitude, Speed, Timestamp] = parts;
+      const timestamp = parts[timestampIndex] || '';
+      const latitude = parseNumber(parts[latitudeIndex]);
+      const longitude = parseNumber(parts[longitudeIndex]);
+      const altitude = parseNumber(parts[altitudeIndex]);
+      const speed = parseNumber(parts[speedIndex]);
+      const isBacklog = backlogIndex !== -1 ? parseBooleanValue(parts[backlogIndex]) : false;
+      const voltage = voltageIndex !== -1 ? parseNumber(parts[voltageIndex]) : null;
+      const current = currentIndex !== -1 ? parseNumber(parts[currentIndex]) : null;
 
-      const lat = parseNumber(Latitude);
-      const lon = parseNumber(Longitude);
-      const alt = parseNumber(Altitude);
-      const speed = parseNumber(Speed);
-
-      if ([lat, lon, alt, speed].some((value) => value === null)) {
+      if ([latitude, longitude, altitude, speed].some((value) => value === null)) {
         continue;
       }
 
-      rows.push({
-        latitude: lat,
-        longitude: lon,
-        altitude: alt,
-        speed: speed,
-        timestamp: Timestamp ? Timestamp.trim() : new Date().toISOString()
-      });
+      const row = {
+        latitude,
+        longitude,
+        altitude,
+        speed,
+        isBacklog,
+        timestamp: timestamp ? timestamp.trim() : new Date().toISOString()
+      };
+
+      if (voltage !== null) {
+        row.voltage = voltage;
+      }
+
+      if (current !== null) {
+        row.current = current;
+      }
+
+      rows.push(row);
     }
 
     if (rows.length === 0) return res.status(400).json({ error: 'No valid rows found in CSV' });

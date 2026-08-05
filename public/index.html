@@ -347,10 +347,6 @@
                 <span class="telemetry-value" id="lon-value">--</span>
             </div>
             <div class="telemetry-row">
-                <span class="telemetry-label">Voltage:</span>
-                <span class="telemetry-value" id="volt-value">--</span>
-            </div>
-            <div class="telemetry-row">
                 <span class="telemetry-label">Altitude:</span>
                 <span class="telemetry-value" id="alt-value">--</span>
             </div>
@@ -359,16 +355,32 @@
                 <span class="telemetry-value" id="speed-value">--</span>
             </div>
             <div class="telemetry-row">
-                <span class="telemetry-label">Backlog:</span>
-                <span class="telemetry-value" id="backlog-value">--</span>
+                <span class="telemetry-label">Voltage:</span>
+                <span class="telemetry-value" id="volt-value">--</span>
+            </div>
+            <div class="telemetry-row">
+                <span class="telemetry-label">Current:</span>
+                <span class="telemetry-value" id="current-value">--</span>
             </div>
             <div class="telemetry-row">
                 <span class="telemetry-label">Last Update:</span>
                 <span class="telemetry-value" id="time-value">--:--:--</span>
             </div>
             <div class="telemetry-row">
-                <button onclick="toggleDiv('control-panel')">Controls</button>
-                <button onclick="toggleDiv('stats-panel')">Stats</button>
+                <button onclick="clearTrack()" title="Clear Track" style="padding: 6px 12px; cursor: pointer; flex: 1;">🗑️ Clear Track</button>
+            </div>
+            <!-- Com ports    Entry-->
+             <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 6px;">
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <label for="port-select" style="font-size: 12px; color: #f8f9fa;">Serial Port</label>
+                    <select id="port-select" style="flex: 1; padding: 6px; border-radius: 4px; border: 1px solid #ced4da;"></select>
+                </div>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button onclick="refreshSerialPorts()" style="padding: 6px 10px; flex: 1; background: #6c757d;">Refresh</button>
+                    <button onclick="connectSerialPort()" style="padding: 6px 10px; flex: 1; background: #28a745;">Connect</button>
+                    <button onclick="disconnectSerialPort()" style="padding: 6px 10px; flex: 1; background: #dc3545;">Disconnect</button>
+                </div>
+                <div id="serial-status-text" style="font-size: 11px; color: #f1f3f5;">Serial: disconnected</div>
             </div>
         </div>
     </div>
@@ -391,59 +403,7 @@
             <div class="stat-item">
                 <span class="stat-label">Time Elapsed (s):</span>
                 <span class="stat-value" id="stat-time">--</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-label">Average Speed:</span>
-                <span class="stat-value" id="stat-avg-speed">--</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-label">Voltage (Min):</span>
-                <span class="stat-value" id="stat-volt-min">--</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-label">Voltage (Max):</span>
-                <span class="stat-value" id="stat-volt-max">--</span>
-            </div>
-        </div>
-    </div>
-
-    <div id="control-panel" style="display: flex; flex-direction: column; gap: 10px; background: #fff; padding: 12px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); width: fit-content;">
-        <div class="overlay-collapse-toggle" data-target="control-panel" aria-label="Collapse controls">
-            ▾
-        </div>
-        <div class="overlay-body">
-            <!-- Row 1: Map Operations -->
-            <div style="display: flex; gap: 8px; align-items: center;">
-                <button onclick="centerMap()" title="Center Map" style="padding: 6px 12px; cursor: pointer; flex: 1;">📍 Center Map</button>
-                <button onclick="clearTrack()" title="Clear Track" style="padding: 6px 12px; cursor: pointer; flex: 1;">🗑️ Clear Track</button>
-            </div>
-
-            <!-- Row 2: File Operations -->
-            <div style="display: flex; gap: 8px; align-items: center;">
-                <button onclick="downloadTrack()" title="Export Data" style="padding: 6px 12px; cursor: pointer; flex: 1; background: #343a40; border: 1px solid #495057; border-radius: 4px; font-size: 13px; color: #ffffff; font-family: sans-serif;">⬇️Export</button>
-                <label title="Upload Data" style="padding: 6px 12px; cursor: pointer; flex: 1; background: #343a40; border: 1px solid #495057; border-radius: 4px; font-size: 13px; color: #ffffff; text-align: center; box-sizing: border-box; font-family: sans-serif; display: inline-block;">
-                    ⬆️ Upload <input id="csv-file" type="file" accept=".csv" style="display: none;" onchange="uploadTrackCSV()" />
-                </label>
-            </div>
-
-            <!-- Row 3: Stopwatch Media Controls -->
-            <div style="display: flex; gap: 8px; align-items: center;">
-                <button onclick="startStopwatch()" title="Start/Play" style="padding: 8px 16px; border: 1px solid #c8e6c9; border-radius: 4px; cursor: pointer; flex: 1; font-weight: bold;">▶️ Start</button>
-                <button onclick="stopStopwatch()" title="Stop Track" style="padding: 8px 16px; border: 1px solid #ffcdd2; border-radius: 4px; cursor: pointer; flex: 1; font-weight: bold;">🔲 Stop</button>
-            </div>
-
-            <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 6px;">
-                <div style="display: flex; gap: 6px; align-items: center;">
-                    <label for="port-select" style="font-size: 12px; color: #495057;">Serial Port</label>
-                    <select id="port-select" style="flex: 1; padding: 6px; border-radius: 4px; border: 1px solid #ced4da;"></select>
-                </div>
-                <div style="display: flex; gap: 6px; align-items: center;">
-                    <button onclick="refreshSerialPorts()" style="padding: 6px 10px; flex: 1; background: #6c757d;">Refresh</button>
-                    <button onclick="connectSerialPort()" style="padding: 6px 10px; flex: 1; background: #28a745;">Connect</button>
-                    <button onclick="disconnectSerialPort()" style="padding: 6px 10px; flex: 1; background: #dc3545;">Disconnect</button>
-                </div>
-                <div id="serial-status-text" style="font-size: 11px; color: #495057;">Serial: disconnected</div>
-            </div>
+            </div>            
         </div>
     </div>
 
@@ -687,7 +647,11 @@
             const altNum = data.altitude !== undefined && data.altitude !== null ? parseFloat(data.altitude) : NaN;
             const speedNum = data.speed !== undefined && data.speed !== null ? parseFloat(data.speed) : NaN;
 
-            document.getElementById('volt-value').textContent = Number.isFinite(altNum) ? '--' : 'N/A';
+            const voltNum = data.voltage !== undefined && data.voltage !== null ? parseFloat(data.voltage) : NaN;
+            const currentNum = data.current !== undefined && data.current !== null ? parseFloat(data.current) : NaN;
+
+            document.getElementById('volt-value').textContent = Number.isFinite(voltNum) ? `${voltNum.toFixed(2)} V` : 'N/A';
+            document.getElementById('current-value').textContent = Number.isFinite(currentNum) ? `${currentNum.toFixed(2)} A` : 'N/A';
             document.getElementById('alt-value').textContent = Number.isFinite(altNum) ? `${altNum.toFixed(2)} m` : 'N/A';
             document.getElementById('speed-value').textContent = Number.isFinite(speedNum) ? `${speedNum.toFixed(2)} m/s` : 'N/A';
             document.getElementById('backlog-value').textContent = data.isBacklog ? 'Yes' : 'No';
