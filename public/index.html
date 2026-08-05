@@ -401,6 +401,10 @@
                 <span class="stat-value" id="stat-distance">--</span>
             </div>
             <div class="stat-item">
+                <span class="stat-label">Max Speed:</span>
+                <span class="stat-value" id="stat-max-speed">--</span>
+            </div>
+            <div class="stat-item">
                 <span class="stat-label">Time Elapsed (s):</span>
                 <span class="stat-value" id="stat-time">--</span>
             </div>            
@@ -414,6 +418,7 @@
         <label><input type="radio" name="format" value="ddm" onchange="updateCoordinateFormat()"> DDM</label>
     </div>
 
+    <script src="/stats.js"></script>
     <script>
         let map;
         let marker;
@@ -715,56 +720,56 @@
             });
         }
 
+        function resetStatsDisplay() {
+            document.getElementById('stat-points').textContent = '0';
+            document.getElementById('stat-distance').textContent = '--';
+            document.getElementById('stat-max-speed').textContent = '--';
+            document.getElementById('stat-time').textContent = '--';
+        }
+
         function clearTrack() {
             coordinateHistory = [];
             polyline.setLatLngs([]);
-            document.getElementById('stat-points').textContent = '0';
+            resetStatsDisplay();
             console.log('Track cleared');
         }
 
         function updateStats() {
             const segment = getSegmentPoints();
-            if (!segment || segment.length === 0) return;
+            if (!segment || segment.length === 0) {
+                resetStatsDisplay();
+                return;
+            }
 
             for (const c of segment) {
-                if (!Number.isFinite(Number(c.lat)) || !Number.isFinite(Number(c.lon))) return;
+                if (!Number.isFinite(Number(c.lat)) || !Number.isFinite(Number(c.lon))) {
+                    resetStatsDisplay();
+                    return;
+                }
             }
 
-            let totalDistanceKm = 0;
-            for (let i = 1; i < segment.length; i++) {
-                const prev = segment[i - 1];
-                const curr = segment[i];
-                const latDiff = (curr.lat - prev.lat) * 111;
-                const lonDiff = (curr.lon - prev.lon) * 111 * Math.cos(curr.lat * Math.PI / 180);
-                totalDistanceKm += Math.sqrt(latDiff * latDiff + lonDiff * lonDiff);
-            }
-
-            const firstTs = segment[0].timestamp;
-            const lastTs = segment[segment.length - 1].timestamp;
-            const firstMs = firstTs ? Date.parse(firstTs) : NaN;
-            const lastMs = lastTs ? Date.parse(lastTs) : NaN;
-
-            let elapsedSec = 0;
-            if (Number.isFinite(firstMs) && Number.isFinite(lastMs) && lastMs >= firstMs) {
-                elapsedSec = (lastMs - firstMs) / 1000;
-            }
-
-            const avgSpeedMps = (Number.isFinite(elapsedSec) && elapsedSec > 0)
-                ? ((totalDistanceKm * 1000) / elapsedSec)
-                : null;
-
+            const stats = computeTrackStats(segment);
             const pointsEl = document.getElementById('stat-points');
-            if (pointsEl) pointsEl.textContent = segment.length;
+            if (pointsEl) pointsEl.textContent = stats.pointCount;
 
             const distEl = document.getElementById('stat-distance');
-            if (distEl) distEl.textContent = totalDistanceKm.toFixed(2);
+            if (distEl) distEl.textContent = stats.totalDistanceKm.toFixed(2);
+
+            const maxSpeedEl = document.getElementById('stat-max-speed');
+            if (maxSpeedEl) {
+                if (stats.maxSpeedKmh === null) {
+                    maxSpeedEl.textContent = '--';
+                } else {
+                    maxSpeedEl.textContent = `${stats.maxSpeedKmh.toFixed(2)} km/h`;
+                }
+            }
 
             const timeEl = document.getElementById('stat-time');
             if (timeEl) {
-                if (!Number.isFinite(elapsedSec) || elapsedSec < 0) {
+                if (!Number.isFinite(stats.elapsedSec) || stats.elapsedSec < 0) {
                     timeEl.textContent = '--';
                 } else {
-                    const totalSeconds = Math.floor(elapsedSec);
+                    const totalSeconds = Math.floor(stats.elapsedSec);
                     const hours = Math.floor(totalSeconds / 3600);
                     const minutes = Math.floor((totalSeconds % 3600) / 60);
                     const seconds = totalSeconds % 60;
@@ -772,21 +777,6 @@
                     timeEl.textContent = `${hours}:${pad2(minutes)}:${pad2(seconds)}`;
                 }
             }
-
-            const avgEl = document.getElementById('stat-avg-speed');
-            if (avgEl) {
-                if (avgSpeedMps === null) {
-                    avgEl.textContent = '--';
-                } else {
-                    const avgSpeedKmh = avgSpeedMps * 3.6;
-                    avgEl.textContent = `${avgSpeedKmh.toFixed(2)} km/h`;
-                }
-            }
-
-            const voltMinEl = document.getElementById('stat-volt-min');
-            if (voltMinEl) voltMinEl.textContent = '--';
-            const voltMaxEl = document.getElementById('stat-volt-max');
-            if (voltMaxEl) voltMaxEl.textContent = '--';
         }
 
         function startStopwatch() {
