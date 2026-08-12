@@ -246,6 +246,16 @@
             animation: none;
         }
 
+        .serial-debug-text {
+            font-size: 10px;
+            line-height: 1.4;
+            color: #dee2e6;
+            min-height: 14px;
+            margin-top: 4px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.5; }
@@ -381,6 +391,7 @@
                     <button onclick="disconnectSerialPort()" style="padding: 6px 10px; flex: 1; background: #dc3545;">Disconnect</button>
                 </div>
                 <div id="serial-status-text" style="font-size: 11px; color: #f1f3f5;">Serial: disconnected</div>
+                <div id="serial-debug-text" class="serial-debug-text"></div>
             </div>
         </div>
     </div>
@@ -397,7 +408,7 @@
                 <span class="stat-value" id="stat-points">0</span>
             </div>
             <div class="stat-item">
-                <span class="stat-label">Distance (km):</span>
+                <span class="stat-label">Total Distance Travelled:</span>
                 <span class="stat-value" id="stat-distance">--</span>
             </div>
             <div class="stat-item">
@@ -405,9 +416,9 @@
                 <span class="stat-value" id="stat-max-speed">--</span>
             </div>
             <div class="stat-item">
-                <span class="stat-label">Time Elapsed (s):</span>
+                <span class="stat-label">Route Duration:</span>
                 <span class="stat-value" id="stat-time">--</span>
-            </div>            
+            </div>
         </div>
     </div>
 
@@ -498,6 +509,10 @@
             socket.on('serial_status', (data) => {
                 updateSerialStatus(data);
             });
+
+            socket.on('serial_debug', (data) => {
+                updateSerialDebugText(data && data.text ? data.text : '');
+            });
         }
 
         function updateSerialStatus(data) {
@@ -521,6 +536,13 @@
                     hintMessage ? `• ${hintMessage}` : ''
                 ].filter(Boolean).join(' ');
                 statusText.textContent = message;
+            }
+        }
+
+        function updateSerialDebugText(text) {
+            const debugText = document.getElementById('serial-debug-text');
+            if (debugText) {
+                debugText.textContent = text || '';
             }
         }
 
@@ -618,6 +640,22 @@
             const pos = [latNum, lonNum];
             const timestamp = new Date();
             const formattedCoords = formatCoordinates(latNum, lonNum, currentFormat);
+            const altNum = data.altitude !== undefined && data.altitude !== null ? parseFloat(data.altitude) : NaN;
+            const speedNum = data.speed !== undefined && data.speed !== null ? parseFloat(data.speed) : NaN;
+            const voltNum = data.voltage !== undefined && data.voltage !== null ? parseFloat(data.voltage) : NaN;
+            const currentNum = data.current !== undefined && data.current !== null ? parseFloat(data.current) : NaN;
+
+            coordinateHistory.push({
+                lat: latNum,
+                lon: lonNum,
+                altitude: Number.isFinite(altNum) ? altNum : 0,
+                speed: Number.isFinite(speedNum) ? speedNum : 0,
+                timestamp: timestamp.toISOString(),
+                voltage: Number.isFinite(voltNum) ? voltNum : undefined,
+                current: Number.isFinite(currentNum) ? currentNum : undefined
+            });
+
+            const routeDistanceKm = computeTrackStats(coordinateHistory).totalDistanceKm;
 
             marker.setLatLng(pos);
             marker.setStyle({ opacity: 1, fillOpacity: 0.8 });
@@ -625,18 +663,13 @@
                 <strong>ESP32-S3 GPS Tracker</strong><br>
                 Lat: ${formattedCoords.lat}<br>
                 Lon: ${formattedCoords.lon}<br>
-                Altitude: ${data.altitude ? parseFloat(data.altitude).toFixed(2) + ' m' : 'N/A'}<br>
-                Speed: ${data.speed ? parseFloat(data.speed).toFixed(2) + ' m/s' : 'N/A'}<br>
+                Altitude: ${Number.isFinite(altNum) ? `${altNum.toFixed(2)} m` : 'N/A'}<br>
+                Speed: ${Number.isFinite(speedNum) ? `${speedNum.toFixed(2)} m/s` : 'N/A'}<br>
+                Voltage: ${Number.isFinite(voltNum) ? `${voltNum.toFixed(2)} V` : 'N/A'}<br>
+                Current: ${Number.isFinite(currentNum) ? `${currentNum.toFixed(2)} A` : 'N/A'}<br>
+                Total Distance: ${routeDistanceKm.toFixed(2)} km<br>
                 Time: ${timestamp.toLocaleTimeString()}
             `);
-
-            coordinateHistory.push({
-                lat: latNum,
-                lon: lonNum,
-                altitude: data.altitude ? parseFloat(data.altitude) : 0,
-                speed: data.speed ? parseFloat(data.speed) : 0,
-                timestamp: timestamp.toISOString()
-            });
 
             polyline.addLatLng(pos);
             map.panTo(pos);
@@ -648,19 +681,10 @@
 
             document.getElementById('lat-value').textContent = formattedCoords.lat;
             document.getElementById('lon-value').textContent = formattedCoords.lon;
-
-            const altNum = data.altitude !== undefined && data.altitude !== null ? parseFloat(data.altitude) : NaN;
-            const speedNum = data.speed !== undefined && data.speed !== null ? parseFloat(data.speed) : NaN;
-
-            const voltNum = data.voltage !== undefined && data.voltage !== null ? parseFloat(data.voltage) : NaN;
-            const currentNum = data.current !== undefined && data.current !== null ? parseFloat(data.current) : NaN;
-
             document.getElementById('volt-value').textContent = Number.isFinite(voltNum) ? `${voltNum.toFixed(2)} V` : 'N/A';
             document.getElementById('current-value').textContent = Number.isFinite(currentNum) ? `${currentNum.toFixed(2)} A` : 'N/A';
             document.getElementById('alt-value').textContent = Number.isFinite(altNum) ? `${altNum.toFixed(2)} m` : 'N/A';
             document.getElementById('speed-value').textContent = Number.isFinite(speedNum) ? `${speedNum.toFixed(2)} m/s` : 'N/A';
-            document.getElementById('backlog-value').textContent = data.isBacklog ? 'Yes' : 'No';
-
             document.getElementById('time-value').textContent = timestamp.toLocaleTimeString();
 
             updateStats();
@@ -699,25 +723,8 @@
             initSocket();
         }
 
-        // Stopwatch state
-        let isTiming = false;
-        let timingStartMs = null;
-        let timingEndMs = null;
-
-        function getSegmentPoints() {
-            if (!isTiming && timingEndMs === null) return coordinateHistory;
-            if (!coordinateHistory.length) return [];
-
-            const startMs = timingStartMs;
-            const endMs = timingEndMs;
-            if (!Number.isFinite(startMs)) return [];
-
-            const endBound = (endMs === null) ? Infinity : endMs;
-
-            return coordinateHistory.filter((p) => {
-                const t = p.timestamp ? Date.parse(p.timestamp) : NaN;
-                return Number.isFinite(t) && t >= startMs && t <= endBound;
-            });
+        function getTrackPoints() {
+            return coordinateHistory;
         }
 
         function resetStatsDisplay() {
@@ -735,14 +742,16 @@
         }
 
         function updateStats() {
-            const segment = getSegmentPoints();
+            const segment = getTrackPoints();
             if (!segment || segment.length === 0) {
                 resetStatsDisplay();
                 return;
             }
 
             for (const c of segment) {
-                if (!Number.isFinite(Number(c.lat)) || !Number.isFinite(Number(c.lon))) {
+                const lat = Number(c.lat ?? c.latitude);
+                const lon = Number(c.lon ?? c.longitude);
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
                     resetStatsDisplay();
                     return;
                 }
@@ -753,7 +762,7 @@
             if (pointsEl) pointsEl.textContent = stats.pointCount;
 
             const distEl = document.getElementById('stat-distance');
-            if (distEl) distEl.textContent = stats.totalDistanceKm.toFixed(2);
+            if (distEl) distEl.textContent = `${stats.totalDistanceKm.toFixed(2)} km`;
 
             const maxSpeedEl = document.getElementById('stat-max-speed');
             if (maxSpeedEl) {
@@ -779,104 +788,6 @@
             }
         }
 
-        function startStopwatch() {
-            if (coordinateHistory.length === 0) return;
-            const latest = coordinateHistory[coordinateHistory.length - 1];
-            const t = latest.timestamp ? Date.parse(latest.timestamp) : NaN;
-            if (!Number.isFinite(t)) {
-                alert('Cannot start: invalid timestamp in data');
-                return;
-            }
-            isTiming = true;
-            timingStartMs = t;
-            timingEndMs = null;
-        }
-
-        function stopStopwatch() {
-            if (!isTiming) return;
-            const latest = coordinateHistory[coordinateHistory.length - 1];
-            const t = latest.timestamp ? Date.parse(latest.timestamp) : NaN;
-            if (!Number.isFinite(t)) return;
-            timingEndMs = t;
-            isTiming = false;
-        }
-
-        function centerMap() {
-            if (coordinateHistory.length > 0) {
-                const latest = coordinateHistory[coordinateHistory.length - 1];
-                map.setView([latest.lat, latest.lon], 16);
-            }
-        }
-
-        function downloadTrack() {
-            if (coordinateHistory.length === 0) {
-                alert('No track data to download');
-                return;
-            }
-
-            const csv = 'Latitude,Longitude,Altitude,Speed,Timestamp\n' +
-                coordinateHistory.map(c => `${c.lat},${c.lon},${c.altitude},${c.speed},"${c.timestamp}"`).join('\n');
-
-            const blob = new Blob([csv], { type: 'text/csv' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `gps-track-${new Date().toISOString().slice(0, 10)}.csv`;
-            a.click();
-        }
-
-        async function uploadTrackCSV() {
-            const input = document.getElementById('csv-file');
-            if (!input || !input.files || input.files.length === 0) {
-                alert('Select a CSV file first');
-                return;
-            }
-
-            const file = input.files[0];
-            if (!file.name.toLowerCase().endsWith('.csv')) {
-                alert('Please upload a .csv file');
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append('csv', file);
-
-            try {
-                const resp = await fetch('/api/upload-csv', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const data = await resp.json().catch(() => null);
-                if (!resp.ok) {
-                    alert((data && data.error) ? data.error : 'Upload failed');
-                    return;
-                }
-
-                clearTrack();
-                alert(`Upload successful: loaded ${data.points_loaded} points`);
-            } catch (e) {
-                console.error('uploadTrackCSV error:', e);
-                alert('Upload failed due to a network/server error');
-            }
-        }
-
-        function toggleDiv(targetId) {
-            const panel = document.getElementById(targetId);
-            if (!panel) return;
-
-            const shouldExpand = panel.classList.contains('panel-collapsed');
-            panel.classList.toggle('panel-collapsed', !shouldExpand);
-
-            const t = document.querySelector(`.overlay-collapse-toggle[data-target="${targetId}"]`);
-            if (t) t.textContent = shouldExpand ? '▾' : '▸';
-
-            // Update toggle visibility on layout reflow
-            try {
-                panel.style.display = '';
-            } catch (e) {}
-        }
-
         function setupOverlayCollapse() {
 
             const toggleEls = document.querySelectorAll('.overlay-collapse-toggle');
@@ -895,7 +806,7 @@
             // Auto-collapse on initial small screens
             const isSmall = window.matchMedia('(orientation: portrait), (max-width: 520px)').matches;
             if (isSmall) {
-                ['telemetry-panel', 'stats-panel', 'control-panel'].forEach((id) => {
+                ['telemetry-panel', 'stats-panel'].forEach((id) => {
                     const panel = document.getElementById(id);
                     const t = document.querySelector(`.overlay-collapse-toggle[data-target="${id}"]`);
                     if (!panel || !t) return;
@@ -908,7 +819,7 @@
             const mq = window.matchMedia('(orientation: portrait), (max-width: 520px)');
             mq.addEventListener('change', (e) => {
                 const shouldCollapse = e.matches;
-                ['telemetry-panel', 'stats-panel', 'control-panel'].forEach((id) => {
+                ['telemetry-panel', 'stats-panel'].forEach((id) => {
                     const panel = document.getElementById(id);
                     const t = document.querySelector(`.overlay-collapse-toggle[data-target="${id}"]`);
                     if (!panel || !t) return;

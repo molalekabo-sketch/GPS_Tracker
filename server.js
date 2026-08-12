@@ -4,7 +4,7 @@ const path = require('path');
 const socketIo = require('socket.io');
 const multer = require('multer');
 const { SerialPort } = require('serialport');
-const { parseGpsFrame, formatSerialError } = require('./serialParser');
+const { parseGpsFrame, formatSerialError, splitSerialLines, sanitizeSerialDebugText } = require('./serialParser');
 
 const app = express();
 const server = http.createServer(app);
@@ -42,6 +42,53 @@ function parseBooleanValue(payload) {
   return !Number.isNaN(parsedInt) ? parsedInt !== 0 : false;
 }
 
+function computeDistanceKm(points) {
+  if (!points || points.length < 2) return 0;
+
+  let totalDistanceKm = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const prev = points[i - 1];
+    const curr = points[i];
+
+    const latDiff = (Number(curr.latitude ?? curr.lat) - Number(prev.latitude ?? prev.lat)) * 111;
+    const lonDiff = (Number(curr.longitude ?? curr.lon) - Number(prev.longitude ?? prev.lon)) * 111 * Math.cos((Number(curr.latitude ?? curr.lat) * Math.PI) / 180);
+    totalDistanceKm += Math.sqrt(latDiff * latDiff + lonDiff * lonDiff);
+  }
+
+  return totalDistanceKm;
+}
+
+function buildTrackSummary(points) {
+  if (!points || points.length === 0) {
+    return { totalDistanceKm: 0, pointCount: 0, maxSpeedKmh: null, elapsedSec: 0 };
+  }
+
+  const totalDistanceKm = computeDistanceKm(points);
+  const firstPoint = points[0];
+  const lastPoint = points[points.length - 1];
+  const firstMs = firstPoint && firstPoint.timestamp ? Date.parse(firstPoint.timestamp) : NaN;
+  const lastMs = lastPoint && lastPoint.timestamp ? Date.parse(lastPoint.timestamp) : NaN;
+  const elapsedSec = Number.isFinite(firstMs) && Number.isFinite(lastMs) && lastMs >= firstMs ? (lastMs - firstMs) / 1000 : 0;
+
+  let maxSpeedKmh = null;
+  points.forEach((point) => {
+    const speedMps = Number(point.speed);
+    if (Number.isFinite(speedMps) && speedMps >= 0) {
+      const speedKmh = speedMps * 3.6;
+      if (maxSpeedKmh === null || speedKmh > maxSpeedKmh) {
+        maxSpeedKmh = speedKmh;
+      }
+    }
+  });
+
+  return {
+    totalDistanceKm,
+    pointCount: points.length,
+    maxSpeedKmh,
+    elapsedSec
+  };
+}
+
 function emitLocationData(data) {
   const timestamp = data.timestamp || new Date().toISOString();
   const payload = {
@@ -65,6 +112,12 @@ function emitLocationData(data) {
 
   coordinateHistory.push({ ...payload });
   if (coordinateHistory.length > MAX_HISTORY) coordinateHistory.shift();
+
+  const trackSummary = buildTrackSummary(coordinateHistory);
+  payload.totalDistanceKm = trackSummary.totalDistanceKm;
+  payload.pointCount = trackSummary.pointCount;
+  payload.maxSpeedKmh = trackSummary.maxSpeedKmh;
+  payload.elapsedSec = trackSummary.elapsedSec;
 
   console.log('[SOCKET OUT] Emitting complete coordinate package to UI:', payload);
   io.emit('location_update', payload);
@@ -101,7 +154,9 @@ async function refreshAvailablePorts() {
 function handleIncomingFrame(rawFrame) {
   const packet = parseGpsFrame(rawFrame);
   if (!packet) {
+    const debugText = sanitizeSerialDebugText(rawFrame);
     console.warn('[SERIAL] Ignoring malformed frame:', rawFrame);
+    io.emit('serial_debug', { text: debugText });
     return;
   }
 
@@ -109,6 +164,7 @@ function handleIncomingFrame(rawFrame) {
     ...packet,
     timestamp: new Date().toISOString()
   });
+  io.emit('serial_debug', { text: '' });
 }
 
 function attachSerialHandlers(port) {
@@ -116,10 +172,10 @@ function attachSerialHandlers(port) {
 
   port.on('data', (chunk) => {
     serialBuffer += chunk.toString('utf8');
-    const lines = serialBuffer.split(/\r?\n/);
-    serialBuffer = lines.pop() || '';
+    const { lines, remainder } = splitSerialLines(serialBuffer);
+    serialBuffer = remainder;
 
-    lines.filter(Boolean).forEach((line) => {
+    lines.forEach((line) => {
       handleIncomingFrame(line);
     });
   });
@@ -210,12 +266,16 @@ app.get('/api/history', (req, res) => {
 app.get('/api/stats', (req, res) => {
   if (coordinateHistory.length === 0) return res.status(404).json({ error: 'No location data available' });
 
-  const lats = coordinateHistory.map((c) => c.latitude);
-  const lons = coordinateHistory.map((c) => c.longitude);
-  const alts = coordinateHistory.map((c) => c.altitude);
+  const lats = coordinateHistory.map((c) => Number(c.latitude ?? c.lat));
+  const lons = coordinateHistory.map((c) => Number(c.longitude ?? c.lon));
+  const alts = coordinateHistory.map((c) => Number(c.altitude));
+  const summary = buildTrackSummary(coordinateHistory);
 
   res.json({
     total_points: coordinateHistory.length,
+    total_distance_km: summary.totalDistanceKm,
+    max_speed_kmh: summary.maxSpeedKmh,
+    elapsed_sec: summary.elapsedSec,
     current: currentLocation,
     bounds: {
       north: Math.max(...lats),
@@ -385,6 +445,7 @@ io.on('connection', (socket) => {
     port: serialPortPath,
     error: serialPortError
   });
+  socket.emit('serial_debug', { text: '' });
 
   socket.on('disconnect', () => {
     console.log('User closed the tracker dashboard.');

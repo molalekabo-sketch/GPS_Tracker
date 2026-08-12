@@ -117,6 +117,41 @@ function parseBacklogCsvRow(line) {
   return payload;
 }
 
+function splitSerialLines(rawBuffer) {
+  const text = String(rawBuffer ?? '');
+  if (!text) {
+    return { lines: [], remainder: '' };
+  }
+
+  const parts = text.split(/\r\n|\n|\r/);
+  const remainder = parts.pop() || '';
+  const lines = parts.filter((line) => String(line).trim() !== '');
+
+  return { lines, remainder };
+}
+
+function sanitizeSerialDebugText(rawFrame) {
+  const text = String(rawFrame ?? '').trim();
+  if (!text) return '';
+
+  if (parseGpsFrame(text)) {
+    return '';
+  }
+
+  const normalizedText = text.replace(/^MSG\s*,\s*/i, '');
+  const parts = normalizedText.split(',');
+  if (parts.length > 1) {
+    const firstCandidate = parts[0].trim();
+    const looksLikeTimestamp = !Number.isNaN(Date.parse(firstCandidate));
+    if (looksLikeTimestamp) {
+      const payload = parts.slice(1).join(',').trim();
+      return payload;
+    }
+  }
+
+  return normalizedText;
+}
+
 function parseGpsFrame(rawFrame) {
   const line = String(rawFrame || '').trim();
   if (!line) return null;
@@ -198,5 +233,7 @@ module.exports = {
   parseCsvLine,
   parseBacklogCsvRow,
   parseGpsFrame,
+  splitSerialLines,
+  sanitizeSerialDebugText,
   formatSerialError
 };
