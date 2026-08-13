@@ -39,11 +39,9 @@ struct TelemetryData {
   float current;           // System draw (A)
 };
 
----
+Smart Calibration & Failsafes
 
-🧠 Smart Calibration & Failsafes
-
-The WCS1500 sensor is a $V_{CC}/2$ ratiometric sensor. To ensure high accuracy, this firmware implements:
+The WCS1500 sensor is a ratiometric sensor. To ensure high accuracy, this firmware implements:
 
 1. Dynamic VDD Scaling: Sensitivity is calculated against the real-world (4.6V) rather than assuming a perfect 5.0V supply.
 2. Moving Average Filter: Raw amperage readings are smoothed through a 20-sample circular buffer.
@@ -51,7 +49,7 @@ The WCS1500 sensor is a $V_{CC}/2$ ratiometric sensor. To ensure high accuracy, 
 
 more details and in-depth explanation of the sensor at:
 https://github.com/viwemqaqa/WCS1500-current-sensor/tree/main
----
+
 
 Setup & Installation
 
