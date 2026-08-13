@@ -18,7 +18,7 @@ Voltage: Uses an M5Stack U087 Voltmeter (ADS1115 16-bit I2C ADC) to measure main
 
 *Components:*                                                
 
-|<img width="65" height="35" alt="image" src="https://github.com/user-attachments/assets/3f9c653d-26b9-4816-9cc8-dd6601ce581f" /> |Makerfabs ESP32 with 4G LTE CAT1 - A7670E|
+|<img width="130" height="70" alt="image" src="https://github.com/user-attachments/assets/3f9c653d-26b9-4816-9cc8-dd6601ce581f" /> |Makerfabs ESP32 with 4G LTE CAT1 - A7670E|
 |<img width="650" height="350" alt="image" src="https://github.com/user-attachments/assets/f94b732f-319a-43d7-b79c-4ff02cd33fbf" />
 |UART-controlled GSM/GNSS Module|
 | <img width="500" height="500" alt="image" src="https://github.com/user-attachments/assets/77312cd8-6058-4183-91ab-56e3af702260" />
