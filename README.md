@@ -27,17 +27,16 @@ Data Payload Structure
 
 The system packages all sensor and location data into a lightweight C-struct before logging it to CSV and broadcasting it over ESP-NOW.
 
-struct TelemetryData {
-  unsigned long timestamp; // Uptime in milliseconds
-  float latitude;          // GPS Latitude
-  float longitude;         // GPS Longitude
-  float altitude;          // Altitude in meters
-  float speed;             // Speed in km/h or knots
-  bool isValid;            // GPS Lock status
-  bool isBacklog;          // Flag indicating if data is live or recovered
-  float voltage;           // Battery voltage (V)
-  float current;           // System draw (A)
-};
+TelemetryData:
+unsigned long timestamp
+float latitude          
+float longitude         
+float altitude          
+float speed            
+bool isValid            
+bool isBacklog         
+float voltage           
+float current           
 
 ---
 Smart Calibration & Failsafes
@@ -80,4 +79,4 @@ uint8_t receiverAddress[] = {0xXX, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX};
 SD Card File System
 
 unsent.csv - The active backlog queue. Live data is appended here until a successful ESP-NOW transmission acknowledges receipt.
-/temp.csv - Used internally during the backlog flushing process to safely truncate the file without data loss.
+temp.csv - Used internally during the backlog flushing process to safely truncate the file without data loss.
