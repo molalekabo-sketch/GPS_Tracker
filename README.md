@@ -39,6 +39,7 @@ struct TelemetryData {
   float current;           // System draw (A)
 };
 
+---
 Smart Calibration & Failsafes
 
 The WCS1500 sensor is a ratiometric sensor. To ensure high accuracy, this firmware implements:
@@ -50,6 +51,7 @@ The WCS1500 sensor is a ratiometric sensor. To ensure high accuracy, this firmwa
 more details and in-depth explanation of the sensor at:
 https://github.com/viwemqaqa/WCS1500-current-sensor/tree/main
 
+---
 
 Setup & Installation
 
