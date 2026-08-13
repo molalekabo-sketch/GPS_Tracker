@@ -18,12 +18,12 @@ Voltage: Uses an M5Stack U087 Voltmeter (ADS1115 16-bit I2C ADC) to measure main
 
 *Components:*                                                
 
-|<img width="130" height="70" alt="image" src="https://github.com/user-attachments/assets/3f9c653d-26b9-4816-9cc8-dd6601ce581f" /> |Makerfabs ESP32 with 4G LTE CAT1 - A7670E|
-|<img width="650" height="350" alt="image" src="https://github.com/user-attachments/assets/f94b732f-319a-43d7-b79c-4ff02cd33fbf" />
+|<img width="195" height="105" alt="image" src="https://github.com/user-attachments/assets/3f9c653d-26b9-4816-9cc8-dd6601ce581f" /> |Makerfabs ESP32 with 4G LTE CAT1 - A7670E|
+|<img width="325" height="175" alt="image" src="https://github.com/user-attachments/assets/f94b732f-319a-43d7-b79c-4ff02cd33fbf" />
 |UART-controlled GSM/GNSS Module|
-| <img width="500" height="500" alt="image" src="https://github.com/user-attachments/assets/77312cd8-6058-4183-91ab-56e3af702260" />
+| <img width="250" height="250" alt="image" src="https://github.com/user-attachments/assets/77312cd8-6058-4183-91ab-56e3af702260" />
 |WCS1500 Hall Effect Sensor|
-|<img width="640" height="640" alt="image" src="https://github.com/user-attachments/assets/692c051b-c32f-46a0-8df9-dee69c4a2fce" />
+|<img width="320" height="320" alt="image" src="https://github.com/user-attachments/assets/692c051b-c32f-46a0-8df9-dee69c4a2fce" />
  |M5Stack U087 (ADS1115 I2C)|
 |<img width="225" height="257" alt="image" src="https://github.com/user-attachments/assets/ef1a353f-8158-4349-b7ea-3eb5d379e3f4" />
  |MicroSD Card |
