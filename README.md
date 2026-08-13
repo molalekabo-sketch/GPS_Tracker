@@ -62,15 +62,15 @@ https://github.com/viwemqaqa/WCS1500-current-sensor/tree/main
 *Dependencies*
 (Ensure you have the following libraries installed in your Arduino IDE or PlatformIO environment:)
 
-M5Unified & M5GFX
+M5Unified & M5GFX,
 M5_ADS1115
 
 *Built-in ESP32 core libraries:*
 
-WiFi 
-esp_now
-SD_MMC
-Wire
+WiFi, 
+esp_now, 
+SD_MMC, 
+Wire, 
 HardwareSerial
 
 **Configuration**
