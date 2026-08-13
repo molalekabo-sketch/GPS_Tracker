@@ -77,7 +77,9 @@ HardwareSerial
 
 1. Target MAC Address: Update the receiverAddress array with the MAC address of your ESP-NOW receiver node.
    
+'''c 
 uint8_t receiverAddress[] = {0xXX, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX};
+'''
 
 
 *SD Card File System:*
