@@ -29,16 +29,19 @@ Voltage: Uses an M5Stack U087 Voltmeter (ADS1115 16-bit I2C ADC) to measure main
 
 The system packages all sensor and location data into a lightweight C-struct before logging it to CSV and broadcasting it over ESP-NOW.
 
-*TelemetryData:*
-unsigned long timestamp
-float latitude          
-float longitude         
-float altitude          
-float speed            
-bool isValid            
-bool isBacklog         
-float voltage           
-float current           
+```c
+struct TelemetryData {
+  unsigned long timestamp;
+  float latitude;
+  float longitude;
+  float altitude;
+  float speed;
+  bool isValid;
+  bool isBacklog;
+  float voltage;
+  float current;
+};
+```
 
 ---
 *Smart Calibration & Failsafes:*
