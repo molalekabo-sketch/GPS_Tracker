@@ -90,5 +90,7 @@ uint8_t receiverAddress[] = {0xXX, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX};
 **Web Application:**
 
 -Node.js (required)
+
 -npm install (VSCode,to install dependencies)
+
 -npm server.js (To run server on localhost)
