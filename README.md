@@ -88,6 +88,7 @@ uint8_t receiverAddress[] = {0xXX, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX};
 ```c /temp.csv``` - Used internally during the backlog flushing process to safely truncate the file without data loss.
 
 **Web Application:**
+
 -Node.js (required)
 -npm install (VSCode,to install dependencies)
 -npm server.js (To run server on localhost)
