@@ -86,3 +86,8 @@ uint8_t receiverAddress[] = {0xXX, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX};
 
 ```c /unsent.csv``` - The active backlog queue. Live data is appended here until a successful ESP-NOW transmission acknowledges receipt.
 ```c /temp.csv``` - Used internally during the backlog flushing process to safely truncate the file without data loss.
+
+**Web Application:**
+-Node.js (required)
+-npm install (VSCode,to install dependencies)
+-npm server.js (To run server on localhost)
