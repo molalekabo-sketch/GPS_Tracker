@@ -89,8 +89,8 @@ uint8_t receiverAddress[] = {0xXX, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX};
 
 **Web Application:**
 
--Node.js (required)
+-Node.js (required) https://nodejs.org/en/download (use the msi installer)
 
--npm install (VSCode,to install dependencies)
+-npm install (from VSCode terminal ,to install dependencies) https://code.visualstudio.com/download?_exp_download=fb315fc982
 
 -npm server.js (To run server on localhost)
