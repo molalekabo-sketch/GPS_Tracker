@@ -32,7 +32,7 @@ float calibration_factor = 0.0;
 #define PIN_SD_D0      13
 
 // --- Sensor Pins & Configuration ---
-#define CURRENT_SENSOR_PIN 9             // Verified ESP32-S3 pin
+#define CURRENT_SENSOR_PIN 1             // Verified ESP32-S3 pin
 float WCS1500_OFFSET = 2.3;              // Will be auto-calibrated in setup
 const int SDA_PIN = 17;
 const int SCL_PIN = 18;
